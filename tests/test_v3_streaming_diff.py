@@ -129,7 +129,7 @@ def test_detect_schema_drift_all_cases() -> None:
 def test_run_pipeline_streaming_mode_and_diff_cli(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    sample_csv = next(Path("data").rglob("*.csv"))
+    sample_csv = Path("data/raw/ventes.csv")
     db_file = tmp_path / "v3_diff.sqlite"
 
     # Run 1 : mode batch

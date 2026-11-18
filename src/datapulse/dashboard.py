@@ -1,4 +1,4 @@
-"""Dashboard web autonome pour l'observatoire DataPulse V5."""
+"""Dashboard web autonome pour l'observatoire DataPulse V6."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ def render_dashboard_html() -> str:
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>DataPulse V5 — Observatoire Qualité &amp; Anomalies</title>
+  <title>DataPulse V6 — Observatoire Qualité &amp; Anomalies</title>
   <style>
     :root {
       --bg: #0b1120;
@@ -118,7 +118,7 @@ def render_dashboard_html() -> str:
       </div>
       <div style="display: flex; gap: 0.75rem; align-items: center;">
         <a href="/docs" style="color: var(--accent); text-decoration: none;">OpenAPI /docs</a>
-        <span class="badge">v5.0.0</span>
+        <span class="badge">v6.0.0</span>
       </div>
     </header>
 
@@ -146,9 +146,7 @@ def render_dashboard_html() -> str:
       <form class="upload-bar" id="run-form">
         <input type="file" id="file-input" required />
         <select id="domain-select">
-          <option value="commerce">commerce</option>
-          <option value="finance">finance</option>
-          <option value="administration">administration</option>
+          <option value="auto">auto (Détection automatique)</option>
         </select>
         <label style="display: flex; align-items: center; gap: 0.4rem; font-size: 0.9rem;">
           <input type="checkbox" id="quarantine-check" checked />
@@ -178,6 +176,21 @@ def render_dashboard_html() -> str:
   </div>
 
   <script>
+    async function loadDomains() {
+      const res = await fetch('/api/domains');
+      const data = await res.json();
+      const select = document.getElementById('domain-select');
+      const items = data.domains || [];
+      if (items.length > 0) {
+        select.innerHTML = items.map(d => {
+          const label = d.domain === 'auto'
+            ? 'auto — Détection / Inférence automatique'
+            : `${d.domain} — ${d.description}`;
+          return `<option value="${d.domain}">${label}</option>`;
+        }).join('');
+      }
+    }
+
     async function refreshDashboard() {
       const [runsRes, quarRes] = await Promise.all([
         fetch('/api/runs?limit=20'),
@@ -219,18 +232,22 @@ def render_dashboard_html() -> str:
       formData.append('domain', document.getElementById('domain-select').value);
       formData.append('quarantine', document.getElementById('quarantine-check').checked);
 
+      feedback.style.color = 'var(--muted)';
       feedback.textContent = 'Exécution du pipeline en cours...';
       const resp = await fetch('/api/runs/upload', { method: 'POST', body: formData });
       const data = await resp.json();
       if (resp.ok) {
+        feedback.style.color = 'var(--ok)';
         feedback.textContent =
-          `Run ${data.run.run_id.slice(0, 8)} terminé : ${data.run.findings_count} incident(s).`;
+          `Run ${data.run.run_id.slice(0, 8)} (${data.run.domain}) terminé : ${data.run.findings_count} incident(s).`;
         await refreshDashboard();
       } else {
+        feedback.style.color = 'var(--err)';
         feedback.textContent = `Erreur : ${data.detail || 'Échec du pipeline'}`;
       }
     });
 
+    loadDomains();
     refreshDashboard();
   </script>
 </body>

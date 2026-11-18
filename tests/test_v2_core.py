@@ -127,7 +127,7 @@ def test_storage_wraps_corrupted_database_error(tmp_path: Path) -> None:
 def test_cli_strict_mode_returns_quality_alert_when_findings_exist(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    sample_csv = next(Path("data").rglob("*.csv"))
+    sample_csv = Path("data/raw/ventes.csv")
     db_file = tmp_path / "strict.sqlite"
 
     code = run_pipeline(
@@ -155,7 +155,7 @@ def test_cli_inspect_missing_run_returns_execution_error(
 
 
 def test_cli_main_invalid_domain_returns_exit_code_2(capsys: pytest.CaptureFixture[str]) -> None:
-    sample_csv = next(Path("data").rglob("*.csv"))
+    sample_csv = Path("data/raw/ventes.csv")
     code = main(["run-all", "--file", str(sample_csv), "--domain", "domaine_inexistant_xyz"])
     assert code == int(ExitCode.EXECUTION_ERROR)
     assert "[ERREUR]" in capsys.readouterr().err
@@ -186,7 +186,7 @@ def test_cli_inspect_existing_run_displays_steps(
 ) -> None:
     from datapulse.cli import inspect_run
 
-    sample_csv = next(Path("data").rglob("*.csv"))
+    sample_csv = Path("data/raw/ventes.csv")
     db_file = tmp_path / "inspect_ok.sqlite"
 
     run_pipeline(
@@ -211,7 +211,7 @@ def test_cli_inspect_existing_run_displays_steps(
 def test_cli_run_all_with_json_logs_emits_valid_json(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    sample_csv = next(Path("data").rglob("*.csv"))
+    sample_csv = Path("data/raw/ventes.csv")
     db_file = tmp_path / "json_logs.sqlite"
 
     code = run_pipeline(

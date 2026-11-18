@@ -1,4 +1,4 @@
-"""Interface en ligne de commande DataPulse V5."""
+"""Interface en ligne de commande DataPulse V6."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from typing import Any
 import pandas as pd
 
 from datapulse.benchmark import evaluate_against_reference
-from datapulse.config_loader import ConfigError, load_domain_config
+from datapulse.config_loader import ConfigError
 from datapulse.detector import detect_anomalies
 from datapulse.exceptions import DataPulseError, ExitCode
 from datapulse.ingestion import ingest_file, iter_file_chunks
@@ -25,6 +25,7 @@ from datapulse.quarantine import (
 )
 from datapulse.reconciler import reconcile_findings
 from datapulse.reporter import generate_reports
+from datapulse.schema_inference import generate_domain_yaml, resolve_domain
 from datapulse.storage import DataPulseStorage
 from datapulse.validator import validate_dataframe
 
@@ -36,6 +37,7 @@ def run_pipeline(
     db_path: str = "db/datapulse.sqlite",
     reports_dir: str = "reports",
     processed_dir: str = "data/processed",
+    configs_dir: str = "configs",
     *,
     strict: bool = False,
     json_logs: bool = False,
@@ -49,11 +51,9 @@ def run_pipeline(
 
     tracemalloc.start()
     try:
-        with tracker.track_step("config_load"):
-            config = load_domain_config(domain)
-
         storage = DataPulseStorage(db_path=db_path)
-        previous_profile = storage.get_previous_run_profile(domain, exclude_run_id=run_id)
+        resolved_domain = domain
+        config: dict[str, Any] = {}
 
         if chunk_size is not None:
             with tracker.track_step("streaming_ingestion_profile_validate") as step:
@@ -65,8 +65,16 @@ def run_pipeline(
                 sample_frames: list[pd.DataFrame] = []
                 sampled_rows = 0
                 max_sample_rows = 50_000
+                contract_resolved = False
 
                 for offset, chunk in chunk_iter:
+                    if not contract_resolved:
+                        resolved_domain, config = resolve_domain(
+                            chunk, domain, configs_dir=configs_dir
+                        )
+                        tracker.telemetry.pipeline_name = f"datapulse.{resolved_domain}"
+                        contract_resolved = True
+
                     s_profiler.update(chunk)
                     chunk_violations = validate_dataframe(chunk, config)
                     for v in chunk_violations:
@@ -76,6 +84,11 @@ def run_pipeline(
                         take = chunk.iloc[: max_sample_rows - sampled_rows]
                         sample_frames.append(take)
                         sampled_rows += len(take)
+
+                if not contract_resolved:
+                    resolved_domain, config = resolve_domain(
+                        pd.DataFrame(), domain, configs_dir=configs_dir
+                    )
 
                 profile = s_profiler.finalize()
                 row_count = int(profile["row_count"])
@@ -95,6 +108,10 @@ def run_pipeline(
                 step.rows_in = row_count
                 step.rows_out = row_count
 
+            with tracker.track_step("config_resolution"):
+                resolved_domain, config = resolve_domain(df, domain, configs_dir=configs_dir)
+                tracker.telemetry.pipeline_name = f"datapulse.{resolved_domain}"
+
             with tracker.track_step("profiling", rows_in=row_count) as step:
                 profile = profile_dataframe(df)
                 step.rows_out = len(profile.get("columns", []))
@@ -102,6 +119,8 @@ def run_pipeline(
             with tracker.track_step("validation", rows_in=row_count) as step:
                 violations = validate_dataframe(df, config)
                 step.rows_out = len(violations)
+
+        previous_profile = storage.get_previous_run_profile(resolved_domain, exclude_run_id=run_id)
 
         with tracker.track_step("anomaly_detection", rows_in=len(df)) as step:
             anomalies, warnings = detect_anomalies(df, config)
@@ -123,20 +142,22 @@ def run_pipeline(
         with tracker.track_step("export_processed", rows_in=len(annotated_df)) as step:
             out_processed = Path(processed_dir)
             out_processed.mkdir(parents=True, exist_ok=True)
-            processed_file = out_processed / f"{domain}_{run_id[:8]}_annotated.csv"
+            processed_file = out_processed / f"{resolved_domain}_{run_id[:8]}_annotated.csv"
             annotated_df.to_csv(processed_file, index=False)
             if quarantine:
                 clean_df, quarantined_records = partition_clean_and_quarantine(
                     annotated_df, findings
                 )
-                clean_file = out_processed / f"{domain}_{run_id[:8]}_clean.csv"
+                clean_file = out_processed / f"{resolved_domain}_{run_id[:8]}_clean.csv"
                 clean_df.to_csv(clean_file, index=False)
             step.rows_out = len(annotated_df)
 
         benchmark_metrics = None
         if ref_path:
             with tracker.track_step("benchmark", rows_in=row_count):
-                benchmark_metrics = evaluate_against_reference(df, ref_path, findings, domain)
+                benchmark_metrics = evaluate_against_reference(
+                    df, ref_path, findings, resolved_domain
+                )
 
         telemetry = tracker.finalize()
         _, peak_bytes = tracemalloc.get_traced_memory()
@@ -146,10 +167,10 @@ def run_pipeline(
         meta_obj = RunMeta(
             run_id=run_id,
             timestamp=timestamp,
-            domain=domain,
+            domain=resolved_domain,
             source_file=str(raw_copy_path),
             file_hash_sha256=file_hash,
-            config_version=str(config.get("version", "5.0")),
+            config_version=str(config.get("version", "6.0")),
             row_count=row_count,
             duration_ms=telemetry.total_duration_ms,
             peak_memory_kb=peak_memory_kb,
@@ -160,7 +181,7 @@ def run_pipeline(
         steps_payload = [s.to_dict() for s in telemetry.steps]
         storage.save_run(run_meta, profile, findings, steps=steps_payload)
         if quarantine and quarantined_records:
-            storage.save_quarantine_rows(run_id, domain, quarantined_records)
+            storage.save_quarantine_rows(run_id, resolved_domain, quarantined_records)
         if benchmark_metrics:
             storage.save_benchmark(run_id, benchmark_metrics)
 
@@ -175,7 +196,7 @@ def run_pipeline(
         )
 
         mode_label = f"streaming={chunk_size}" if chunk_size else "batch"
-        print(f"\n=== DataPulse V5 | Run {run_id[:8]} ({domain} | {mode_label}) ===")
+        print(f"\n=== DataPulse V6 | Run {run_id[:8]} ({resolved_domain} | {mode_label}) ===")
         print(f"Fichier     : {raw_copy_path} ({row_count} lignes)")
         print(f"Complétude  : {profile['completeness_pct']}%")
         print(
@@ -203,6 +224,28 @@ def run_pipeline(
     finally:
         if tracemalloc.is_tracing():
             tracemalloc.stop()
+
+
+def init_config_cmd(
+    file_path: str,
+    domain: str,
+    output_dir: str = "configs",
+    *,
+    force: bool = False,
+) -> int:
+    target_path, config = generate_domain_yaml(
+        file_path=file_path,
+        domain_name=domain,
+        output_dir=output_dir,
+        overwrite=force,
+    )
+    rules_count = len(config.get("rules", []))
+    stat_cols = config.get("anomaly_detection", {}).get("columns", [])
+    print(f"\n=== Contrat DataPulse généré : {target_path} ===")
+    print(f"Domaine           : {config['domain']}")
+    print(f"Règles inférées   : {rules_count}")
+    print(f"Colonnes MAD/Stat : {', '.join(stat_cols) if stat_cols else 'aucune'}\n")
+    return int(ExitCode.SUCCESS)
 
 
 def show_history(domain: str | None = None, db_path: str = "db/datapulse.sqlite") -> int:
@@ -362,14 +405,16 @@ def serve_api(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="datapulse",
-        description="DataPulse V5 — Observatoire générique de qualité et d'anomalies de données",
+        description="DataPulse V6 — Observatoire générique de qualité et d'anomalies de données",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_run = sub.add_parser("run-all", help="Exécute le pipeline complet sur un fichier")
     p_run.add_argument("--file", required=True, help="Chemin vers CSV/Excel/JSON/JSONL/Parquet")
     p_run.add_argument(
-        "--domain", required=True, help="Nom du domaine (commerce, finance, administration)"
+        "--domain",
+        required=True,
+        help="Nom du domaine (commerce, finance, administration, diamonds, ou 'auto')",
     )
     p_run.add_argument(
         "--ref", required=False, help="Fichier propre de référence pour le benchmark"
@@ -394,6 +439,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--quarantine",
         action="store_true",
         help="Isole les lignes rejetées dans SQLite et exporte un fichier *_clean.csv",
+    )
+
+    p_init = sub.add_parser(
+        "init-config", help="Infère et génère un contrat YAML depuis un fichier de données"
+    )
+    p_init.add_argument("--file", required=True, help="Fichier échantillon (CSV/XLSX/JSON/Parquet)")
+    p_init.add_argument("--domain", required=True, help="Nom du nouveau domaine à créer")
+    p_init.add_argument(
+        "--output-dir", default="configs", help="Répertoire de destination (défaut: configs)"
+    )
+    p_init.add_argument(
+        "--force", action="store_true", help="Écrase le contrat YAML s'il existe déjà"
     )
 
     p_hist = sub.add_parser("history", help="Affiche l'historique des analyses SQLite")
@@ -445,6 +502,13 @@ def main(argv: list[str] | None = None) -> int:
                 chunk_size=args.chunk_size,
                 quarantine=args.quarantine,
             )
+        if args.command == "init-config":
+            return init_config_cmd(
+                file_path=args.file,
+                domain=args.domain,
+                output_dir=args.output_dir,
+                force=args.force,
+            )
         if args.command == "history":
             return show_history(domain=args.domain)
         if args.command == "inspect":
@@ -452,9 +516,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "diff":
             return diff_runs(run_a=args.run_a, run_b=args.run_b, domain=args.domain)
         if args.command == "quarantine":
-            return manage_quarantine(
-                domain=args.domain, status=args.status, export_csv=args.export
-            )
+            return manage_quarantine(domain=args.domain, status=args.status, export_csv=args.export)
         if args.command == "replay":
             return run_replay(file_path=args.file, domain=args.domain)
         if args.command == "serve":

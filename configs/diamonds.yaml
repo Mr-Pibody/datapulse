@@ -1,0 +1,49 @@
+domain: diamonds
+version: "1.0"
+description: "Contrat qualité sur le jeu de données réel Diamonds (53 940 enregistrements)"
+rules:
+  - id: R_PRICE_POS
+    column: price
+    check: gt
+    value: 0
+    severity: HIGH
+    message: "Le prix doit être strictement positif"
+  - id: R_CARAT_POS
+    column: carat
+    check: gt
+    value: 0
+    severity: HIGH
+    message: "Le poids en carats doit être positif"
+  - id: R_DIM_X_POS
+    column: x
+    check: gt
+    value: 0
+    severity: HIGH
+    message: "Dimension physique X nulle ou négative (erreur de saisie réelle)"
+  - id: R_DIM_Y_POS
+    column: y
+    check: gt
+    value: 0
+    severity: HIGH
+    message: "Dimension physique Y nulle ou négative (erreur de saisie réelle)"
+  - id: R_DIM_Z_POS
+    column: z
+    check: gt
+    value: 0
+    severity: HIGH
+    message: "Dimension physique Z nulle ou négative (erreur de saisie réelle)"
+  - id: R_CUT_VALID
+    column: cut
+    check: in_set
+    values: ["Ideal", "Premium", "Very Good", "Good", "Fair"]
+    severity: MEDIUM
+    message: "Qualité de taille non reconnue"
+anomaly_detection:
+  columns: ["carat", "price", "x", "y", "z"]
+  zscore_threshold: 3.5
+  iqr_multiplier: 2.0
+  mad_threshold: 4.0
+  enable_mad: true
+  enable_multivariate: true
+  multivariate_threshold: 5.0
+  min_sample_size: 30

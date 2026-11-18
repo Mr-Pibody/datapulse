@@ -1,4 +1,4 @@
-"""API REST FastAPI et endpoints d'observabilité DataPulse V5."""
+"""API REST FastAPI et endpoints d'observabilité DataPulse V6."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from datapulse.cli import run_pipeline
 from datapulse.config_loader import ConfigError
 from datapulse.dashboard import render_dashboard_html
 from datapulse.exceptions import DataPulseError, StorageTransactionError
+from datapulse.schema_inference import list_available_domains
 from datapulse.storage import DataPulseStorage
 
 
@@ -21,11 +22,12 @@ def create_app(
     db_path: str = "db/datapulse.sqlite",
     reports_dir: str = "reports",
     processed_dir: str = "data/processed",
+    configs_dir: str = "configs",
 ) -> FastAPI:
     """Construit l'instance FastAPI configurée pour une base SQLite donnée."""
     app = FastAPI(
         title="DataPulse API",
-        version="5.0.0",
+        version="6.0.0",
         description="API REST de gouvernance, qualité et observabilité des données.",
     )
 
@@ -41,9 +43,21 @@ def create_app(
         storage = _storage()
         return {
             "status": "ok",
-            "version": "5.0.0",
+            "version": "6.0.0",
             "db_path": str(storage.db_path),
         }
+
+    @app.get("/api/domains")
+    def get_domains() -> dict[str, Any]:
+        configured = list_available_domains(configs_dir=configs_dir)
+        items = [
+            {
+                "domain": "auto",
+                "description": "Détection automatique du contrat ou inférence à la volée",
+            },
+            *[{"domain": d["domain"], "description": d["description"]} for d in configured],
+        ]
+        return {"count": len(items), "domains": items}
 
     @app.get("/api/runs")
     def list_runs(
@@ -100,7 +114,7 @@ def create_app(
     @app.post("/api/runs/upload")
     async def upload_and_run(
         file: UploadFile = File(...),  # noqa: B008
-        domain: str = Form(...),
+        domain: str = Form(default="auto"),
         quarantine: bool = Form(default=False),
         strict: bool = Form(default=False),
     ) -> dict[str, Any]:
@@ -117,13 +131,15 @@ def create_app(
                     db_path=db_path,
                     reports_dir=reports_dir,
                     processed_dir=processed_dir,
+                    configs_dir=configs_dir,
                     strict=strict,
                     quarantine=quarantine,
                 )
             except (DataPulseError, ConfigError, FileNotFoundError, ValueError) as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-        latest = _storage().get_history(domain=domain, limit=1)
+        lookup_domain = None if domain.strip().lower() == "auto" else domain
+        latest = _storage().get_history(domain=lookup_domain, limit=1)
         return {
             "exit_code": exit_code,
             "run": latest[0] if latest else None,
