@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from datapulse.exceptions import StorageTransactionError
+from datapulse.profiler import detect_schema_drift
 
 
 class DataPulseStorage:
@@ -270,3 +271,87 @@ class DataPulseStorage:
             run_dict["steps"] = [dict(s) for s in steps]
             run_dict["findings"] = [dict(f) for f in findings]
             return run_dict
+
+    def get_previous_run_profile(
+        self, domain: str, exclude_run_id: str | None = None
+    ) -> tuple[str, list[dict[str, Any]]] | None:
+        """Retourne (run_id, profiling_stats) de la précédente exécution du même domaine."""
+        with self._connect() as conn:
+            if exclude_run_id:
+                row = conn.execute(
+                    "SELECT run_id FROM runs WHERE domain = ? AND run_id != ? "
+                    "ORDER BY timestamp DESC LIMIT 1",
+                    (domain, exclude_run_id),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT run_id FROM runs WHERE domain = ? ORDER BY timestamp DESC LIMIT 1",
+                    (domain,),
+                ).fetchone()
+
+            if row is None:
+                return None
+
+            prev_id = str(row["run_id"])
+            cols = conn.execute(
+                "SELECT * FROM profiling_stats WHERE run_id = ? ORDER BY stat_id ASC",
+                (prev_id,),
+            ).fetchall()
+            return prev_id, [dict(c) for c in cols]
+
+    def compare_runs(self, run_a_prefix: str, run_b_prefix: str) -> dict[str, Any]:
+        """Compare deux exécutions (run_a = référence, run_b = cible) et calcule les deltas."""
+        run_a = self.get_run_details(run_a_prefix)
+        run_b = self.get_run_details(run_b_prefix)
+        if run_a is None or run_b is None:
+            missing = run_a_prefix if run_a is None else run_b_prefix
+            raise StorageTransactionError(
+                f"Impossible de comparer : run introuvable '{missing}'",
+                context={"run_a": run_a_prefix, "run_b": run_b_prefix},
+            )
+
+        with self._connect() as conn:
+            cols_a = [
+                dict(r)
+                for r in conn.execute(
+                    "SELECT * FROM profiling_stats WHERE run_id = ? ORDER BY stat_id ASC",
+                    (run_a["run_id"],),
+                ).fetchall()
+            ]
+            cols_b = [
+                dict(r)
+                for r in conn.execute(
+                    "SELECT * FROM profiling_stats WHERE run_id = ? ORDER BY stat_id ASC",
+                    (run_b["run_id"],),
+                ).fetchall()
+            ]
+
+        drifts = detect_schema_drift({"columns": cols_b}, cols_a)
+        return {
+            "run_a": {
+                "run_id": run_a["run_id"],
+                "domain": run_a["domain"],
+                "timestamp": run_a["timestamp"],
+                "row_count": run_a["row_count"],
+                "findings_count": run_a["findings_count"],
+                "duration_ms": run_a["duration_ms"],
+            },
+            "run_b": {
+                "run_id": run_b["run_id"],
+                "domain": run_b["domain"],
+                "timestamp": run_b["timestamp"],
+                "row_count": run_b["row_count"],
+                "findings_count": run_b["findings_count"],
+                "duration_ms": run_b["duration_ms"],
+            },
+            "deltas": {
+                "row_count_delta": int(run_b["row_count"]) - int(run_a["row_count"]),
+                "findings_count_delta": (
+                    int(run_b["findings_count"]) - int(run_a["findings_count"])
+                ),
+                "duration_ms_delta": round(
+                    float(run_b["duration_ms"]) - float(run_a["duration_ms"]), 2
+                ),
+            },
+            "schema_drifts": drifts,
+        }

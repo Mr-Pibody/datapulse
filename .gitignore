@@ -9,3 +9,5 @@ reports/*.html
 reports/*.md
 reports/*.png
 data/processed/*.csv
+.coverage
+data/raw/*_annotated.csv

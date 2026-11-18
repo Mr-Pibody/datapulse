@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "datapulse"
-version = "2.0.0"
+version = "3.0.0"
 description = "Generic rule-based data quality and statistical anomaly observatory."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -24,6 +24,7 @@ dev = [
     "types-PyYAML>=6.0.12",
 ]
 excel = ["openpyxl>=3.1.0"]
+parquet = ["pyarrow>=15.0.0"]
 
 [project.scripts]
 datapulse = "datapulse.cli:main"
