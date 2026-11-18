@@ -1,4 +1,4 @@
-"""Interface en ligne de commande DataPulse V3."""
+"""Interface en ligne de commande DataPulse V4."""
 
 from __future__ import annotations
 
@@ -18,6 +18,11 @@ from datapulse.ingestion import ingest_file, iter_file_chunks
 from datapulse.models import RunMeta
 from datapulse.observability import PipelineTracker, get_structured_logger
 from datapulse.profiler import StreamingProfiler, detect_schema_drift, profile_dataframe
+from datapulse.quarantine import (
+    export_quarantine_to_csv,
+    partition_clean_and_quarantine,
+    replay_corrected_file,
+)
 from datapulse.reconciler import reconcile_findings
 from datapulse.reporter import generate_reports
 from datapulse.storage import DataPulseStorage
@@ -35,6 +40,7 @@ def run_pipeline(
     strict: bool = False,
     json_logs: bool = False,
     chunk_size: int | None = None,
+    quarantine: bool = False,
 ) -> int:
     logger = get_structured_logger(enabled=json_logs)
     tracker = PipelineTracker(pipeline_name=f"datapulse.{domain}", logger=logger)
@@ -50,7 +56,6 @@ def run_pipeline(
         previous_profile = storage.get_previous_run_profile(domain, exclude_run_id=run_id)
 
         if chunk_size is not None:
-            # Mode Streaming : profilage et validation par chunks à empreinte mémoire constante
             with tracker.track_step("streaming_ingestion_profile_validate") as step:
                 raw_copy_path, file_hash, chunk_iter = iter_file_chunks(
                     file_path, chunk_size=chunk_size
@@ -113,11 +118,19 @@ def run_pipeline(
             for d in drifts:
                 warnings.append(f"[SCHEMA DRIFT] {d['explanation']}")
 
+        quarantined_records: list[dict[str, Any]] = []
+        clean_file: Path | None = None
         with tracker.track_step("export_processed", rows_in=len(annotated_df)) as step:
             out_processed = Path(processed_dir)
             out_processed.mkdir(parents=True, exist_ok=True)
             processed_file = out_processed / f"{domain}_{run_id[:8]}_annotated.csv"
             annotated_df.to_csv(processed_file, index=False)
+            if quarantine:
+                clean_df, quarantined_records = partition_clean_and_quarantine(
+                    annotated_df, findings
+                )
+                clean_file = out_processed / f"{domain}_{run_id[:8]}_clean.csv"
+                clean_df.to_csv(clean_file, index=False)
             step.rows_out = len(annotated_df)
 
         benchmark_metrics = None
@@ -136,7 +149,7 @@ def run_pipeline(
             domain=domain,
             source_file=str(raw_copy_path),
             file_hash_sha256=file_hash,
-            config_version=str(config.get("version", "3.0")),
+            config_version=str(config.get("version", "4.0")),
             row_count=row_count,
             duration_ms=telemetry.total_duration_ms,
             peak_memory_kb=peak_memory_kb,
@@ -146,6 +159,8 @@ def run_pipeline(
 
         steps_payload = [s.to_dict() for s in telemetry.steps]
         storage.save_run(run_meta, profile, findings, steps=steps_payload)
+        if quarantine and quarantined_records:
+            storage.save_quarantine_rows(run_id, domain, quarantined_records)
         if benchmark_metrics:
             storage.save_benchmark(run_id, benchmark_metrics)
 
@@ -160,13 +175,18 @@ def run_pipeline(
         )
 
         mode_label = f"streaming={chunk_size}" if chunk_size else "batch"
-        print(f"\n=== DataPulse V3 | Run {run_id[:8]} ({domain} | {mode_label}) ===")
+        print(f"\n=== DataPulse V4 | Run {run_id[:8]} ({domain} | {mode_label}) ===")
         print(f"Fichier     : {raw_copy_path} ({row_count} lignes)")
         print(f"Complétude  : {profile['completeness_pct']}%")
         print(
             f"Incidents   : {len(findings)} uniques | "
             f"Dérives schéma : {len(drifts)} | Statut : {status}"
         )
+        if quarantine:
+            print(
+                f"Quarantaine : {len(quarantined_records)} ligne(s) isolée(s) | "
+                f"Export sain : {clean_file}"
+            )
         print(f"Performance : {telemetry.total_duration_ms} ms | Mémoire max : {peak_memory_kb} Ko")
         if benchmark_metrics:
             print(
@@ -277,10 +297,51 @@ def diff_runs(
     return int(ExitCode.SUCCESS)
 
 
+def manage_quarantine(
+    domain: str | None = None,
+    status: str = "PENDING",
+    export_csv: str | None = None,
+    db_path: str = "db/datapulse.sqlite",
+) -> int:
+    storage = DataPulseStorage(db_path=db_path)
+    records = storage.list_quarantine(domain=domain, status=status)
+    if not records:
+        print(f"Aucun enregistrement en quarantaine (statut={status}).")
+        return int(ExitCode.SUCCESS)
+
+    print(f"\n=== Quarantaine DataPulse ({len(records)} ligne(s) | statut={status}) ===")
+    for rec in records:
+        print(
+            f"  [ID={rec['quarantine_id']}] run={rec['run_id'][:8]} | "
+            f"domaine={rec['domain']} | ligne={rec['row_index']}"
+        )
+
+    if export_csv:
+        out_path = export_quarantine_to_csv(records, export_csv)
+        print(f"\nExport CSV éditable généré : {out_path}")
+    print()
+    return int(ExitCode.SUCCESS)
+
+
+def run_replay(
+    file_path: str,
+    domain: str,
+    db_path: str = "db/datapulse.sqlite",
+) -> int:
+    summary = replay_corrected_file(file_path, domain, db_path=db_path)
+    print(f"\n=== Replay Quarantaine DataPulse ({domain}) ===")
+    print(f"Lignes rejouées      : {summary['total_replayed_rows']}")
+    print(f"Violations restantes : {summary['remaining_violations']}")
+    print(f"Tickets clôturés     : {summary['marked_replayed_count']}\n")
+    if summary["remaining_violations"] > 0:
+        return int(ExitCode.QUALITY_ALERT)
+    return int(ExitCode.SUCCESS)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="datapulse",
-        description="DataPulse V3 — Observatoire générique de qualité et d'anomalies de données",
+        description="DataPulse V4 — Observatoire générique de qualité et d'anomalies de données",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -308,6 +369,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Active l'ingestion en streaming par blocs de N lignes (ex: 50000)",
     )
+    p_run.add_argument(
+        "--quarantine",
+        action="store_true",
+        help="Isole les lignes rejetées dans SQLite et exporte un fichier *_clean.csv",
+    )
 
     p_hist = sub.add_parser("history", help="Affiche l'historique des analyses SQLite")
     p_hist.add_argument("--domain", required=False, help="Filtrer par domaine")
@@ -321,6 +387,19 @@ def build_parser() -> argparse.ArgumentParser:
     p_diff.add_argument(
         "--domain", required=False, help="Compare automatiquement les 2 derniers runs du domaine"
     )
+
+    p_quar = sub.add_parser("quarantine", help="Liste ou exporte les lignes en quarantaine")
+    p_quar.add_argument("--domain", required=False, help="Filtrer par domaine")
+    p_quar.add_argument(
+        "--status", default="PENDING", choices=["PENDING", "REPLAYED"], help="Statut des lignes"
+    )
+    p_quar.add_argument(
+        "--export", required=False, help="Chemin CSV d'export pour correction manuelle"
+    )
+
+    p_rep = sub.add_parser("replay", help="Rejoue un fichier corrigé et clôture la quarantaine")
+    p_rep.add_argument("--file", required=True, help="Chemin vers le CSV corrigé")
+    p_rep.add_argument("--domain", required=True, help="Domaine métier cible")
 
     return parser
 
@@ -338,6 +417,7 @@ def main(argv: list[str] | None = None) -> int:
                 strict=args.strict,
                 json_logs=args.json_logs,
                 chunk_size=args.chunk_size,
+                quarantine=args.quarantine,
             )
         if args.command == "history":
             return show_history(domain=args.domain)
@@ -345,6 +425,10 @@ def main(argv: list[str] | None = None) -> int:
             return inspect_run(run_id=args.run_id)
         if args.command == "diff":
             return diff_runs(run_a=args.run_a, run_b=args.run_b, domain=args.domain)
+        if args.command == "quarantine":
+            return manage_quarantine(domain=args.domain, status=args.status, export_csv=args.export)
+        if args.command == "replay":
+            return run_replay(file_path=args.file, domain=args.domain)
         return int(ExitCode.EXECUTION_ERROR)
     except (DataPulseError, ConfigError, FileNotFoundError, ValueError) as exc:
         print(f"[ERREUR] {exc}", file=sys.stderr)

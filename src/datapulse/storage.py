@@ -5,6 +5,7 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -112,10 +113,25 @@ class DataPulseStorage:
                     FOREIGN KEY (run_id) REFERENCES runs(run_id)
                 );
 
+                CREATE TABLE IF NOT EXISTS quarantine_rows (
+                    quarantine_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id TEXT NOT NULL,
+                    domain TEXT NOT NULL,
+                    row_index INTEGER NOT NULL,
+                    row_payload_json TEXT NOT NULL,
+                    issues_json TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'PENDING',
+                    created_at TEXT NOT NULL,
+                    replayed_at TEXT,
+                    FOREIGN KEY (run_id) REFERENCES runs(run_id)
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_runs_domain_ts ON runs(domain, timestamp DESC);
                 CREATE INDEX IF NOT EXISTS idx_findings_run_id ON findings(run_id);
                 CREATE INDEX IF NOT EXISTS idx_profiling_run_id ON profiling_stats(run_id);
                 CREATE INDEX IF NOT EXISTS idx_step_metrics_run_id ON step_metrics(run_id);
+                CREATE INDEX IF NOT EXISTS idx_quarantine_domain_status
+                    ON quarantine_rows(domain, status);
                 """
             )
 
@@ -210,6 +226,58 @@ class DataPulseStorage:
                         step["throughput_rows_per_sec"],
                     ),
                 )
+
+    def save_quarantine_rows(self, run_id: str, domain: str, rows: list[dict[str, Any]]) -> int:
+        if not rows:
+            return 0
+        now_iso = datetime.now(timezone.utc).isoformat()
+        with self._connect() as conn:
+            for item in rows:
+                conn.execute(
+                    """
+                    INSERT INTO quarantine_rows (
+                        run_id, domain, row_index, row_payload_json,
+                        issues_json, status, created_at
+                    ) VALUES (?, ?, ?, ?, ?, 'PENDING', ?)
+                    """,
+                    (
+                        run_id,
+                        domain,
+                        item["row_index"],
+                        item["row_payload_json"],
+                        item["issues_json"],
+                        now_iso,
+                    ),
+                )
+        return len(rows)
+
+    def list_quarantine(
+        self, domain: str | None = None, status: str = "PENDING", limit: int = 50
+    ) -> list[dict[str, Any]]:
+        query = "SELECT * FROM quarantine_rows WHERE status = ?"
+        params: list[Any] = [status]
+        if domain:
+            query += " AND domain = ?"
+            params.append(domain)
+        query += " ORDER BY quarantine_id ASC LIMIT ?"
+        params.append(limit)
+
+        with self._connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+            return [dict(r) for r in rows]
+
+    def mark_quarantine_replayed(self, quarantine_ids: list[int]) -> int:
+        if not quarantine_ids:
+            return 0
+        now_iso = datetime.now(timezone.utc).isoformat()
+        placeholders = ",".join("?" for _ in quarantine_ids)
+        sql = (
+            f"UPDATE quarantine_rows SET status = 'REPLAYED', replayed_at = ? "
+            f"WHERE quarantine_id IN ({placeholders}) AND status = 'PENDING'"
+        )
+        with self._connect() as conn:
+            cursor = conn.execute(sql, [now_iso, *quarantine_ids])
+            return int(cursor.rowcount)
 
     def save_benchmark(self, run_id: str, metrics: dict[str, Any]) -> None:
         with self._connect() as conn:

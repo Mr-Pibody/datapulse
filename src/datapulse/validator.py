@@ -1,7 +1,22 @@
+"""Validation déclarative des règles métier mono-colonne et multi-colonnes."""
+
+from __future__ import annotations
+
+import operator
+from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
 import pandas as pd
+
+_COMPARISONS: dict[str, Callable[[Any, Any], Any]] = {
+    "lt": operator.lt,
+    "lte": operator.le,
+    "gt": operator.gt,
+    "gte": operator.ge,
+    "eq": operator.eq,
+    "ne": operator.ne,
+}
 
 
 def validate_dataframe(df: pd.DataFrame, config: dict[str, Any]) -> list[dict[str, Any]]:
@@ -35,6 +50,38 @@ def validate_dataframe(df: pd.DataFrame, config: dict[str, Any]) -> list[dict[st
                     )
             continue
 
+        # Règles multi-colonnes : cohérence relationnelle entre deux colonnes
+        if check == "cross_column":
+            left_col = rule.get("left_column")
+            right_col = rule.get("right_column")
+            op_name = str(rule.get("operator", "lte"))
+            comp_fn = _COMPARISONS.get(op_name)
+            if (
+                left_col
+                and right_col
+                and comp_fn is not None
+                and left_col in df.columns
+                and right_col in df.columns
+            ):
+                left_num = pd.to_numeric(df[left_col], errors="coerce")
+                right_num = pd.to_numeric(df[right_col], errors="coerce")
+                both_valid = left_num.notna() & right_num.notna()
+                mask = both_valid & (~comp_fn(left_num, right_num))
+                col_pair = f"{left_col},{right_col}"
+                for idx in df.index[mask]:
+                    pair_val = f"{df.at[idx, left_col]} vs {df.at[idx, right_col]}"
+                    violations.append(
+                        {
+                            "row_index": int(idx),
+                            "column_name": col_pair,
+                            "raw_value": pair_val,
+                            "rule_id": rule_id,
+                            "severity": severity,
+                            "explanation": f"[{rule_id}] {message} ({pair_val})",
+                        }
+                    )
+            continue
+
         # Règles mono-colonne
         col = rule.get("column")
         if not col or col not in df.columns:
@@ -56,6 +103,15 @@ def validate_dataframe(df: pd.DataFrame, config: dict[str, Any]) -> list[dict[st
         elif check == "lte":
             num_s = pd.to_numeric(series, errors="coerce")
             mask = num_s.notna() & (num_s > rule["value"])
+        elif check == "between":
+            num_s = pd.to_numeric(series, errors="coerce")
+            low = float(rule["min"])
+            high = float(rule["max"])
+            mask = num_s.notna() & ((num_s < low) | (num_s > high))
+        elif check == "regex":
+            pattern = str(rule["pattern"])
+            str_s = series.astype(str)
+            mask = series.notna() & (~str_s.str.match(pattern, na=False))
         elif check == "in_set":
             allowed = set(rule.get("values", []))
             mask = series.notna() & (~series.astype(str).isin(allowed))

@@ -1,6 +1,12 @@
+"""Réconciliation et dédoublonnage des violations de règles et anomalies statistiques."""
+
+from __future__ import annotations
+
 from typing import Any
 
 import pandas as pd
+
+from datapulse.models import Finding
 
 
 def reconcile_findings(
@@ -25,7 +31,6 @@ def reconcile_findings(
                 "explanation": v["explanation"],
             }
         else:
-            # Si plusieurs règles échouent sur la même cellule
             merged[key]["rule_id"] += f",{v['rule_id']}"
             merged[key]["explanation"] += f" | {v['explanation']}"
 
@@ -50,7 +55,21 @@ def reconcile_findings(
                 "explanation": a["explanation"],
             }
 
-    findings = sorted(merged.values(), key=lambda x: (x["row_index"], x["column_name"]))
+    sorted_raw = sorted(merged.values(), key=lambda x: (x["row_index"], x["column_name"]))
+    findings = [
+        Finding(
+            row_index=int(item["row_index"]),
+            column_name=str(item["column_name"]),
+            raw_value=str(item["raw_value"]),
+            category=item["category"],
+            rule_id=str(item["rule_id"]),
+            stat_method=str(item["stat_method"]),
+            stat_score=item["stat_score"],
+            severity=item["severity"],
+            explanation=str(item["explanation"]),
+        ).to_dict()
+        for item in sorted_raw
+    ]
 
     # Prépare une copie annotée pour data/processed/ (sans toucher à data/raw/)
     annotated_df = df.copy()
