@@ -1,29 +1,29 @@
-# DataPulse V1
+# DataPulse (v5.0.0)
 
-**DataPulse** is a generic, configuration-driven data quality and statistical anomaly observatory written in Python. It inspects tabular datasets across multiple business domains (**Commerce**, **Finance**, **Public Administration**) without changing a single line of engine code.
+**DataPulse** is an observable, rule-based and statistical data quality engine engineered for multi-domain pipelines (`commerce`, `finance`, `administration`). It combines declarative YAML business contracts, univariate/multivariate statistical anomaly detection, chunked streaming ingestion, SQLite WAL persistence, a Dead-Letter Quarantine workflow, and a FastAPI + Web Dashboard interface.
 
-## Architecture
+---
+
+## Architecture & Pipeline Flow
 
 ```text
-[Source CSV/JSON/XLSX] + [configs/<domain>.yaml]
-        │
-        ▼
-  1. INGESTION   ──► Immutable copy in data/raw/ + SHA-256 fingerprint
-        │
-        ▼
-  2. PROFILING   ──► Schema types, completeness %, mean, median, std, min/max
-        │
-        ├────────────────────────┐
-        ▼                        ▼
-  3. VALIDATOR              4. DETECTOR
-  (Deterministic YAML)      (Z-score & IQR with min_sample_size guard)
-        │                        │
-        └───────────┬────────────┘
-                    ▼
-  5. RECONCILER  ──► Deduplicates (row, col) into RULE_VIOLATION | STAT_ANOMALY | BOTH
-        │
-        ▼
-  6. STORAGE     ──► SQLite audit trail (runs, profiling_stats, findings, benchmarks)
-        │
-        ▼
-  7. REPORTER    ──► Matplotlib charts + Markdown & standalone HTML reports
+Source File (CSV / XLSX / JSON / JSONL / Parquet)
+   │
+   ▼
+[1. Ingestion] ──► Immutable raw copy + SHA-256 fingerprint (batch or chunked stream)
+   │
+   ▼
+[2. Profiling] ──► Column stats + Welford online stats + inter-run Schema Drift detection
+   │
+   ▼
+[3. Validation] ─► Declarative YAML rules (not_null, gt/gte/lt/lte, between, regex, in_set, unique, cross_column)
+   │
+   ▼
+[4. Detection] ──► Univariate (Z-Score, IQR, Modified-Z MAD) + Multivariate L2-MAD
+   │
+   ▼
+[5. Reconciler] ─► Cell-level deduplication (RULE_VIOLATION / STAT_ANOMALY / BOTH)
+   │
+   ├─► [Quarantine DLQ] ─► Isolates rejected rows in SQLite + exports *_clean.csv & replay CSV
+   ├─► [Storage (WAL)] ──► Atomic SQLite transactions (runs, profiling_stats, findings, step_metrics, quarantine_rows)
+   └─► [Reporters/API] ──► HTML/Markdown/PNG artifacts + FastAPI REST endpoints & Web Dashboard

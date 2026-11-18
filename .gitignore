@@ -11,3 +11,5 @@ reports/*.png
 data/processed/*.csv
 .coverage
 data/raw/*_annotated.csv
+
+data/raw/fixed_*.csv

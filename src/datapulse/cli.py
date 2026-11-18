@@ -338,6 +338,27 @@ def run_replay(
     return int(ExitCode.SUCCESS)
 
 
+def serve_api(
+    host: str = "127.0.0.1",
+    port: int = 8000,
+    db_path: str = "db/datapulse.sqlite",
+) -> int:
+    try:
+        import uvicorn
+    except ImportError as exc:
+        print(
+            "[ERREUR] Dépendances API manquantes. Installez : pip install -e '.[api]'",
+            file=sys.stderr,
+        )
+        raise SystemExit(int(ExitCode.EXECUTION_ERROR)) from exc
+
+    from datapulse.api import create_app
+
+    fastapi_app = create_app(db_path=db_path)
+    uvicorn.run(fastapi_app, host=host, port=port)
+    return int(ExitCode.SUCCESS)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="datapulse",
@@ -401,6 +422,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_rep.add_argument("--file", required=True, help="Chemin vers le CSV corrigé")
     p_rep.add_argument("--domain", required=True, help="Domaine métier cible")
 
+    p_srv = sub.add_parser("serve", help="Démarre l'API REST et le Dashboard Web DataPulse")
+    p_srv.add_argument("--host", default="127.0.0.1", help="Adresse d'écoute (défaut: 127.0.0.1)")
+    p_srv.add_argument("--port", type=int, default=8000, help="Port HTTP (défaut: 8000)")
+    p_srv.add_argument("--db", default="db/datapulse.sqlite", help="Chemin de la base SQLite")
+
     return parser
 
 
@@ -432,6 +458,8 @@ def main(argv: list[str] | None = None) -> int:
         return int(ExitCode.EXECUTION_ERROR)
     except (DataPulseError, ConfigError, FileNotFoundError, ValueError) as exc:
         print(f"[ERREUR] {exc}", file=sys.stderr)
+        if args.command == "serve":
+            return serve_api(host=args.host, port=args.port, db_path=args.db)
         return int(ExitCode.EXECUTION_ERROR)
 
 
