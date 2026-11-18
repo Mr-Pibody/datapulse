@@ -24,9 +24,10 @@ def detect_anomalies(
         n = len(series)
 
         if n < min_samples:
+            # Lignes 27-30 :
             warnings.append(
-                f"Limite statistique sur '{col}' : échantillon trop faible (n={n} < {min_samples}), "
-                "détection Z-score/IQR désactivée."
+                f"Limite statistique sur '{col}' : échantillon trop faible "
+                f"(n={n} < {min_samples}), détection Z-score/IQR désactivée."
             )
             continue
 
@@ -75,8 +76,11 @@ def detect_anomalies(
                         "raw_value": str(df.at[idx, col]),
                         "stat_method": method,
                         "stat_score": score,
+                        # Lignes 78-80 :
                         "severity": "HIGH" if is_z else "MEDIUM",
-                        "explanation": f"Anomalie statistique sur '{col}' (valeur={val_f}) : {detail}",
+                        "explanation": (
+                            f"Anomalie statistique sur '{col}' (valeur={val_f}) : {detail}"
+                        ),
                     }
                 )
 

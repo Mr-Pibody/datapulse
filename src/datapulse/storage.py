@@ -1,6 +1,14 @@
+"""Persistance SQLite en mode WAL avec gestion transactionnelle stricte."""
+
+from __future__ import annotations
+
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
+
+from datapulse.exceptions import StorageTransactionError
 
 
 class DataPulseStorage:
@@ -9,13 +17,27 @@ class DataPulseStorage:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_schema()
 
-    def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL;")
-        conn.execute("PRAGMA busy_timeout=5000;")
-        conn.execute("PRAGMA foreign_keys=ON;")
-        return conn
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
+        conn: sqlite3.Connection | None = None
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode=WAL;")
+            conn.execute("PRAGMA busy_timeout=5000;")
+            conn.execute("PRAGMA foreign_keys=ON;")
+            yield conn
+            conn.commit()
+        except sqlite3.Error as exc:
+            if conn is not None:
+                conn.rollback()
+            raise StorageTransactionError(
+                "Échec de transaction SQLite",
+                context={"db_path": str(self.db_path), "sqlite_error": str(exc)},
+            ) from exc
+        finally:
+            if conn is not None:
+                conn.close()
 
     def _init_schema(self) -> None:
         with self._connect() as conn:
@@ -76,9 +98,23 @@ class DataPulseStorage:
                     FOREIGN KEY (run_id) REFERENCES runs(run_id)
                 );
 
+                CREATE TABLE IF NOT EXISTS step_metrics (
+                    step_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id TEXT NOT NULL,
+                    step_order INTEGER NOT NULL,
+                    step_name TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    duration_ms REAL NOT NULL,
+                    rows_in INTEGER NOT NULL,
+                    rows_out INTEGER NOT NULL,
+                    throughput_rows_per_sec REAL NOT NULL,
+                    FOREIGN KEY (run_id) REFERENCES runs(run_id)
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_runs_domain_ts ON runs(domain, timestamp DESC);
                 CREATE INDEX IF NOT EXISTS idx_findings_run_id ON findings(run_id);
                 CREATE INDEX IF NOT EXISTS idx_profiling_run_id ON profiling_stats(run_id);
+                CREATE INDEX IF NOT EXISTS idx_step_metrics_run_id ON step_metrics(run_id);
                 """
             )
 
@@ -87,6 +123,7 @@ class DataPulseStorage:
         run_meta: dict[str, Any],
         profile: dict[str, Any],
         findings: list[dict[str, Any]],
+        steps: list[dict[str, Any]] | None = None,
     ) -> None:
         with self._connect() as conn:
             conn.execute(
@@ -153,6 +190,26 @@ class DataPulseStorage:
                     ),
                 )
 
+            for idx, step in enumerate(steps or [], start=1):
+                conn.execute(
+                    """
+                    INSERT INTO step_metrics (
+                        run_id, step_order, step_name, status,
+                        duration_ms, rows_in, rows_out, throughput_rows_per_sec
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        run_meta["run_id"],
+                        idx,
+                        step["step"],
+                        step["status"],
+                        step["duration_ms"],
+                        step["rows_in"],
+                        step["rows_out"],
+                        step["throughput_rows_per_sec"],
+                    ),
+                )
+
     def save_benchmark(self, run_id: str, metrics: dict[str, Any]) -> None:
         with self._connect() as conn:
             conn.execute(
@@ -185,3 +242,31 @@ class DataPulseStorage:
         with self._connect() as conn:
             rows = conn.execute(query, params).fetchall()
             return [dict(r) for r in rows]
+
+    def get_run_details(self, run_id_prefix: str) -> dict[str, Any] | None:
+        """Retourne un run (par ID complet ou préfixe) avec ses étapes et ses incidents."""
+        with self._connect() as conn:
+            query = (
+                "SELECT * FROM runs WHERE run_id = ? OR run_id LIKE ? "
+                "ORDER BY timestamp DESC LIMIT 1"
+            )
+            run_row = conn.execute(
+                query,
+                (run_id_prefix, f"{run_id_prefix}%"),
+            ).fetchone()
+            if run_row is None:
+                return None
+
+            run_dict = dict(run_row)
+            full_id = run_dict["run_id"]
+            steps = conn.execute(
+                "SELECT * FROM step_metrics WHERE run_id = ? ORDER BY step_order ASC",
+                (full_id,),
+            ).fetchall()
+            findings = conn.execute(
+                "SELECT * FROM findings WHERE run_id = ? ORDER BY finding_id ASC",
+                (full_id,),
+            ).fetchall()
+            run_dict["steps"] = [dict(s) for s in steps]
+            run_dict["findings"] = [dict(f) for f in findings]
+            return run_dict

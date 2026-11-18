@@ -1,8 +1,13 @@
+"""Modèles de domaine strictement typés pour DataPulse."""
+
+from __future__ import annotations
+
 from dataclasses import asdict, dataclass
 from typing import Any, Literal
 
 FindingCategory = Literal["RULE_VIOLATION", "STAT_ANOMALY", "BOTH"]
 SeverityLevel = Literal["LOW", "MEDIUM", "HIGH"]
+RunStatus = Literal["SUCCESS", "QUALITY_ALERT", "FAILED"]
 
 
 @dataclass(frozen=True)
@@ -33,6 +38,34 @@ class RunMeta:
     duration_ms: float
     peak_memory_kb: float
     status: str = "SUCCESS"
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class ColumnStat:
+    column_name: str
+    dtype: str
+    null_count: int
+    mean: float | None = None
+    median: float | None = None
+    std: float | None = None
+    min: float | None = None
+    max: float | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class BenchmarkResult:
+    true_positives: int
+    false_positives: int
+    false_negatives: int
+    precision: float
+    recall: float
+    f1_score: float
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
