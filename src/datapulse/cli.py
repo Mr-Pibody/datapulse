@@ -1,4 +1,4 @@
-"""Interface en ligne de commande DataPulse V9."""
+"""Interface en ligne de commande DataPulse V10."""
 
 from __future__ import annotations
 
@@ -41,6 +41,7 @@ from datapulse.sql_connector import (
 )
 from datapulse.storage import DataPulseStorage
 from datapulse.validator import validate_dataframe
+from datapulse.watcher import get_watcher_status, watch_loop
 
 
 def _finalize_and_report(
@@ -126,7 +127,7 @@ def _finalize_and_report(
         domain=resolved_domain,
         source_file=source_label,
         file_hash_sha256=file_hash,
-        config_version=str(config.get("version", "9.0")),
+        config_version=str(config.get("version", "10.0")),
         row_count=row_count,
         duration_ms=telemetry.total_duration_ms,
         peak_memory_kb=peak_memory_kb,
@@ -161,7 +162,7 @@ def _finalize_and_report(
         reports_dir=reports_dir,
     )
 
-    print(f"\n=== DataPulse V9 | Run {run_id[:8]} ({resolved_domain} | {mode_label}) ===")
+    print(f"\n=== DataPulse V10 | Run {run_id[:8]} ({resolved_domain} | {mode_label}) ===")
     print(f"Source      : {source_label} ({row_count} lignes)")
     print(f"Complétude  : {profile['completeness_pct']}%")
     print(
@@ -616,7 +617,7 @@ def alerts_test_cmd(
         print("Aucun canal configuré (--webhook-url, --slack-url, --discord-url ou env).")
         return int(ExitCode.EXECUTION_ERROR)
 
-    print("\n=== Test des notifications DataPulse V9 ===")
+    print("\n=== Test des notifications DataPulse V10 ===")
     has_failure = False
     for r in results:
         print(f"  - {r['channel']:<10} : {r['status']} ({r['detail']})")
@@ -646,6 +647,58 @@ def show_alerts_history(
     return int(ExitCode.SUCCESS)
 
 
+def watch_cmd(
+    *,
+    watch_dir: str | None = None,
+    config_path: str | None = None,
+    domain: str = "auto",
+    interval: float = 5.0,
+    max_cycles: int | None = None,
+    archive_dir: str | None = None,
+    strict: bool = False,
+    quarantine: bool = True,
+    chunk_size: int | None = None,
+    db_path: str = "db/datapulse.sqlite",
+) -> int:
+    target = config_path or watch_dir or ""
+    print(f"\n=== Orchestrateur DataPulse V10 démarré ({target}) ===")
+    summary = watch_loop(
+        watch_dir=watch_dir,
+        config_path=config_path,
+        domain=domain,
+        interval_sec=interval,
+        max_cycles=max_cycles,
+        db_path=db_path,
+        archive_dir=archive_dir,
+        strict=strict,
+        quarantine=quarantine,
+        chunk_size=chunk_size,
+    )
+    print(
+        f"=== Orchestrateur arrêté | Cycles={summary['cycles']} | "
+        f"Événements traités={summary['processed_count']} ===\n"
+    )
+    return int(ExitCode.SUCCESS)
+
+
+def show_watch_status(db_path: str = "db/datapulse.sqlite", limit: int = 20) -> int:
+    status = get_watcher_status(db_path=db_path, limit=limit)
+    print("\n=== État de l'Orchestrateur DataPulse V10 ===")
+    print(f"Fichiers suivis : {status['files_count']} | Tâches planifiées : {status['jobs_count']}")
+    for f in status["recent_files"]:
+        print(
+            f"  [FILE] {Path(str(f['file_path'])).name:<25} | "
+            f"domaine={f['domain']} | code={f['exit_code']} | {str(f['processed_at'])[:19]}"
+        )
+    for j in status["jobs"]:
+        print(
+            f"  [JOB ] {j['job_name']:<25} | type={j['job_type']} | "
+            f"runs={j['run_count']} | code={j['last_exit_code']}"
+        )
+    print()
+    return int(ExitCode.SUCCESS)
+
+
 def serve_api(
     host: str = "127.0.0.1",
     port: int = 8000,
@@ -670,7 +723,7 @@ def serve_api(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="datapulse",
-        description="DataPulse V9 — Observatoire générique de qualité et d'anomalies de données",
+        description="DataPulse V10 — Observatoire générique de qualité et d'anomalies de données",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -767,6 +820,28 @@ def build_parser() -> argparse.ArgumentParser:
     p_ahist.add_argument("--domain", required=False, help="Filtrer par domaine")
     p_ahist.add_argument("--limit", type=int, default=20, help="Nombre maximal d'entrées")
 
+    p_watch = sub.add_parser(
+        "watch", help="Surveille un dossier (hot-folder) ou exécute un plan YAML périodique"
+    )
+    p_watch.add_argument("--dir", required=False, help="Répertoire de dépôt à surveiller")
+    p_watch.add_argument("--config", required=False, help="Fichier watch.yaml multi-tâches")
+    p_watch.add_argument("--domain", default="auto", help="Domaine cible ou 'auto'")
+    p_watch.add_argument(
+        "--interval", type=float, default=5.0, help="Intervalle de scrutation en secondes"
+    )
+    p_watch.add_argument(
+        "--max-cycles", type=int, default=None, help="Nombre max de cycles (illimité par défaut)"
+    )
+    p_watch.add_argument("--archive-dir", required=False, help="Dossier d'archive après traitement")
+    p_watch.add_argument("--strict", action="store_true", help="Active le mode strict")
+    p_watch.add_argument(
+        "--no-quarantine", action="store_true", help="Désactive l'isolation quarantaine"
+    )
+    p_watch.add_argument("--chunk-size", type=int, default=None, help="Mode streaming par blocs")
+
+    p_wstat = sub.add_parser("watch-status", help="Affiche l'état du watcher et des tâches")
+    p_wstat.add_argument("--limit", type=int, default=20, help="Nombre maximal d'entrées")
+
     p_srv = sub.add_parser("serve", help="Démarre l'API REST et le Dashboard Web DataPulse")
     p_srv.add_argument("--host", default="127.0.0.1", help="Adresse d'écoute (défaut: 127.0.0.1)")
     p_srv.add_argument("--port", type=int, default=8000, help="Port HTTP (défaut: 8000)")
@@ -828,6 +903,20 @@ def main(argv: list[str] | None = None) -> int:
             )
         if args.command == "alerts-history":
             return show_alerts_history(domain=args.domain, limit=args.limit)
+        if args.command == "watch":
+            return watch_cmd(
+                watch_dir=args.dir,
+                config_path=args.config,
+                domain=args.domain,
+                interval=args.interval,
+                max_cycles=args.max_cycles,
+                archive_dir=args.archive_dir,
+                strict=args.strict,
+                quarantine=not args.no_quarantine,
+                chunk_size=args.chunk_size,
+            )
+        if args.command == "watch-status":
+            return show_watch_status(limit=args.limit)
         if args.command == "serve":
             return serve_api(host=args.host, port=args.port, db_path=args.db)
         return int(ExitCode.EXECUTION_ERROR)

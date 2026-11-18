@@ -1,4 +1,4 @@
-"""API REST FastAPI et endpoints d'observabilité DataPulse V9."""
+"""API REST FastAPI et endpoints d'observabilité DataPulse V10."""
 
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ from datapulse.exceptions import DataPulseError, StorageTransactionError
 from datapulse.schema_inference import list_available_domains
 from datapulse.sql_connector import list_sql_tables
 from datapulse.storage import DataPulseStorage
+from datapulse.watcher import get_watcher_status, scan_directory_once
 
 
 class SqlRunRequest(BaseModel):
@@ -43,6 +44,16 @@ class AlertTestRequest(BaseModel):
     webhook_secret: str = ""
 
 
+class WatcherScanRequest(BaseModel):
+    """Charge utile JSON pour déclencher un scan immédiat d'un hot-folder."""
+
+    watch_dir: str
+    domain: str = "auto"
+    archive_dir: str | None = None
+    quarantine: bool = True
+    strict: bool = False
+
+
 def create_app(
     db_path: str = "db/datapulse.sqlite",
     reports_dir: str = "reports",
@@ -52,8 +63,8 @@ def create_app(
     """Construit l'instance FastAPI configurée pour une base SQLite donnée."""
     app = FastAPI(
         title="DataPulse API",
-        version="9.0.0",
-        description="API REST de gouvernance, qualité, Data Drift et alertes temps réel.",
+        version="10.0.0",
+        description="API REST d'orchestration, qualité, Data Drift et alertes temps réel.",
     )
 
     def _storage() -> DataPulseStorage:
@@ -68,7 +79,7 @@ def create_app(
         storage = _storage()
         return {
             "status": "ok",
-            "version": "9.0.0",
+            "version": "10.0.0",
             "db_path": str(storage.db_path),
         }
 
@@ -175,6 +186,28 @@ def create_app(
                 detail="Aucun canal de notification fourni ou configuré.",
             )
         return {"count": len(results), "results": results}
+
+    @app.get("/api/watcher/status")
+    def watcher_status_endpoint(limit: int = Query(default=30, ge=1, le=200)) -> dict[str, Any]:
+        return get_watcher_status(db_path=db_path, limit=limit)
+
+    @app.post("/api/watcher/scan")
+    def watcher_scan_endpoint(payload: WatcherScanRequest) -> dict[str, Any]:
+        try:
+            events = scan_directory_once(
+                payload.watch_dir,
+                domain=payload.domain,
+                db_path=db_path,
+                reports_dir=reports_dir,
+                processed_dir=processed_dir,
+                configs_dir=configs_dir,
+                archive_dir=payload.archive_dir,
+                strict=payload.strict,
+                quarantine=payload.quarantine,
+            )
+        except (DataPulseError, ConfigError, FileNotFoundError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"processed_count": len(events), "events": events}
 
     @app.post("/api/runs/upload")
     async def upload_and_run(

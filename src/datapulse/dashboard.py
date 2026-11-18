@@ -1,4 +1,4 @@
-"""Dashboard web autonome pour l'observatoire DataPulse V9."""
+"""Dashboard web autonome pour l'observatoire DataPulse V10."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ def render_dashboard_html() -> str:
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>DataPulse V9 — Observatoire Qualité, SQL, Data Drift &amp; Alertes</title>
+  <title>DataPulse V10 — Observatoire Qualité, SQL, Drift, Alertes &amp; Watch</title>
   <style>
     :root {
       --bg: #0b1120;
@@ -113,12 +113,12 @@ def render_dashboard_html() -> str:
       <div>
         <h1>DataPulse</h1>
         <p style="color: var(--muted); font-size: 0.9rem;">
-          Observatoire de qualité, Data Drift, SQL et alertes temps réel
+          Observatoire autonome de qualité, Data Drift, SQL et alertes temps réel
         </p>
       </div>
       <div style="display: flex; gap: 0.75rem; align-items: center;">
         <a href="/docs" style="color: var(--accent); text-decoration: none;">OpenAPI /docs</a>
-        <span class="badge">v9.0.0</span>
+        <span class="badge">v10.0.0</span>
       </div>
     </header>
 
@@ -178,6 +178,24 @@ def render_dashboard_html() -> str:
         <button type="submit">Auditer SQL</button>
       </form>
       <div id="sql-feedback" class="feedback"></div>
+    </section>
+
+    <section class="panel">
+      <h2>Orchestrateur Hot-Folder (Scan de Répertoire)</h2>
+      <form class="upload-bar" id="watch-form">
+        <input
+          type="text"
+          id="watch-dir"
+          placeholder="data/inbox"
+          style="min-width: 240px;"
+          required
+        />
+        <select id="watch-domain-select">
+          <option value="auto">auto (Détection automatique)</option>
+        </select>
+        <button type="submit">Scanner le répertoire</button>
+      </form>
+      <div id="watch-feedback" class="feedback"></div>
     </section>
 
     <section class="panel">
@@ -241,6 +259,7 @@ def render_dashboard_html() -> str:
         }).join('');
         document.getElementById('domain-select').innerHTML = optionsHtml;
         document.getElementById('sql-domain-select').innerHTML = optionsHtml;
+        document.getElementById('watch-domain-select').innerHTML = optionsHtml;
       }
     }
 
@@ -328,6 +347,32 @@ def render_dashboard_html() -> str:
       } else {
         feedback.style.color = 'var(--err)';
         feedback.textContent = `Erreur SQL : ${data.detail || 'Échec de connexion'}`;
+      }
+    });
+
+    document.getElementById('watch-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const feedback = document.getElementById('watch-feedback');
+      const payload = {
+        watch_dir: document.getElementById('watch-dir').value.trim(),
+        domain: document.getElementById('watch-domain-select').value,
+        quarantine: true,
+      };
+      feedback.style.color = 'var(--muted)';
+      feedback.textContent = 'Scan du répertoire en cours...';
+      const resp = await fetch('/api/watcher/scan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await resp.json();
+      if (resp.ok) {
+        feedback.style.color = 'var(--ok)';
+        feedback.textContent = `Scan terminé : ${data.processed_count} fichier(s) traité(s).`;
+        await refreshDashboard();
+      } else {
+        feedback.style.color = 'var(--err)';
+        feedback.textContent = `Erreur : ${data.detail || 'Répertoire introuvable'}`;
       }
     });
 
