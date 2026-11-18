@@ -1,4 +1,4 @@
-"""Interface en ligne de commande DataPulse V4."""
+"""Interface en ligne de commande DataPulse V5."""
 
 from __future__ import annotations
 
@@ -149,7 +149,7 @@ def run_pipeline(
             domain=domain,
             source_file=str(raw_copy_path),
             file_hash_sha256=file_hash,
-            config_version=str(config.get("version", "4.0")),
+            config_version=str(config.get("version", "5.0")),
             row_count=row_count,
             duration_ms=telemetry.total_duration_ms,
             peak_memory_kb=peak_memory_kb,
@@ -175,7 +175,7 @@ def run_pipeline(
         )
 
         mode_label = f"streaming={chunk_size}" if chunk_size else "batch"
-        print(f"\n=== DataPulse V4 | Run {run_id[:8]} ({domain} | {mode_label}) ===")
+        print(f"\n=== DataPulse V5 | Run {run_id[:8]} ({domain} | {mode_label}) ===")
         print(f"Fichier     : {raw_copy_path} ({row_count} lignes)")
         print(f"Complétude  : {profile['completeness_pct']}%")
         print(
@@ -362,7 +362,7 @@ def serve_api(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="datapulse",
-        description="DataPulse V4 — Observatoire générique de qualité et d'anomalies de données",
+        description="DataPulse V5 — Observatoire générique de qualité et d'anomalies de données",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -452,14 +452,16 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "diff":
             return diff_runs(run_a=args.run_a, run_b=args.run_b, domain=args.domain)
         if args.command == "quarantine":
-            return manage_quarantine(domain=args.domain, status=args.status, export_csv=args.export)
+            return manage_quarantine(
+                domain=args.domain, status=args.status, export_csv=args.export
+            )
         if args.command == "replay":
             return run_replay(file_path=args.file, domain=args.domain)
+        if args.command == "serve":
+            return serve_api(host=args.host, port=args.port, db_path=args.db)
         return int(ExitCode.EXECUTION_ERROR)
     except (DataPulseError, ConfigError, FileNotFoundError, ValueError) as exc:
         print(f"[ERREUR] {exc}", file=sys.stderr)
-        if args.command == "serve":
-            return serve_api(host=args.host, port=args.port, db_path=args.db)
         return int(ExitCode.EXECUTION_ERROR)
 
 
