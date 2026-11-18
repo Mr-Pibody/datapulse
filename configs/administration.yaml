@@ -1,0 +1,34 @@
+domain: administration
+version: "1.0"
+primary_key: ["id_demande"]
+
+schema:
+  id_demande: { type: string, required: true }
+  service: { type: string, required: true }
+  delai_jours: { type: int, required: true }
+  statut: { type: string, required: true }
+
+rules:
+  - id: A01
+    column: delai_jours
+    check: gte
+    value: 0
+    severity: HIGH
+    message: "Le délai de traitement ne peut pas être négatif"
+  - id: A02
+    column: statut
+    check: in_set
+    values: ["en attente", "traite", "rejete"]
+    severity: HIGH
+    message: "Statut inconnu : doit appartenir à {en attente, traite, rejete}"
+  - id: A03
+    columns: ["id_demande"]
+    check: unique_combination
+    severity: HIGH
+    message: "Doublon détecté sur l'identifiant de demande"
+
+anomaly_detection:
+  columns: ["delai_jours"]
+  zscore_threshold: 3.0
+  iqr_multiplier: 1.5
+  min_sample_size: 30

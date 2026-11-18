@@ -1,0 +1,92 @@
+{
+  "commerce": [
+    {
+      "row": 5,
+      "col": "quantite",
+      "type": "BOTH",
+      "detail": "quantite = -3 (règle R01 + outlier)"
+    },
+    {
+      "row": 18,
+      "col": "prix_unitaire",
+      "type": "RULE_VIOLATION",
+      "detail": "prix_unitaire = 0.0 (R02)"
+    },
+    {
+      "row": 42,
+      "col": "produit",
+      "type": "RULE_VIOLATION",
+      "detail": "produit vide (R03)"
+    },
+    {
+      "row": 75,
+      "col": "date,produit",
+      "type": "RULE_VIOLATION",
+      "detail": "doublon ligne 74 (R04)"
+    },
+    {
+      "row": 120,
+      "col": "quantite",
+      "type": "STAT_ANOMALY",
+      "detail": "pic quantite = 450"
+    }
+  ],
+  "finance": [
+    {
+      "row": 10,
+      "col": "montant",
+      "type": "BOTH",
+      "detail": "montant = -120.50 (F01 + outlier)"
+    },
+    {
+      "row": 33,
+      "col": "date",
+      "type": "RULE_VIOLATION",
+      "detail": "date future 2028-05-12 (F02)"
+    },
+    {
+      "row": 64,
+      "col": "type",
+      "type": "RULE_VIOLATION",
+      "detail": "type = especes (F03)"
+    },
+    {
+      "row": 99,
+      "col": "transaction_id",
+      "type": "RULE_VIOLATION",
+      "detail": "doublon TRX (F04)"
+    },
+    {
+      "row": 150,
+      "col": "montant",
+      "type": "STAT_ANOMALY",
+      "detail": "montant = 9850.00"
+    }
+  ],
+  "administration": [
+    {
+      "row": 8,
+      "col": "delai_jours",
+      "type": "BOTH",
+      "detail": "delai_jours = -4 (A01 + outlier)"
+    },
+    {
+      "row": 51,
+      "col": "statut",
+      "type": "RULE_VIOLATION",
+      "detail": "statut = archive (A02)"
+    },
+    {
+      "row": 88,
+      "col": "id_demande",
+      "type": "RULE_VIOLATION",
+      "detail": "doublon id_demande (A03)"
+    },
+    {
+      "row": 175,
+      "col": "delai_jours",
+      "type": "STAT_ANOMALY",
+      "detail": "delai_jours = 142"
+    }
+  ]
+}

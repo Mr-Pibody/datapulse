@@ -1,0 +1,39 @@
+domain: finance
+version: "1.0"
+primary_key: ["transaction_id"]
+
+schema:
+  transaction_id: { type: string, required: true }
+  date: { type: date, required: true }
+  type: { type: string, required: true }
+  montant: { type: float, required: true }
+
+rules:
+  - id: F01
+    column: montant
+    check: gt
+    value: 0
+    severity: HIGH
+    message: "Le montant de la transaction doit être strictement positif"
+  - id: F02
+    column: date
+    check: not_future
+    severity: HIGH
+    message: "La date de transaction ne peut pas être dans le futur"
+  - id: F03
+    column: type
+    check: in_set
+    values: ["credit", "debit", "virement"]
+    severity: HIGH
+    message: "Type invalide : doit appartenir à {credit, debit, virement}"
+  - id: F04
+    columns: ["transaction_id"]
+    check: unique_combination
+    severity: MEDIUM
+    message: "Identifiant de transaction en doublon"
+
+anomaly_detection:
+  columns: ["montant"]
+  zscore_threshold: 3.0
+  iqr_multiplier: 1.5
+  min_sample_size: 30
