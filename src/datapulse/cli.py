@@ -1,4 +1,4 @@
-"""Interface en ligne de commande DataPulse V7."""
+"""Interface en ligne de commande DataPulse V8."""
 
 from __future__ import annotations
 
@@ -13,6 +13,12 @@ import pandas as pd
 from datapulse.benchmark import evaluate_against_reference
 from datapulse.config_loader import ConfigError
 from datapulse.detector import detect_anomalies
+from datapulse.drift import (
+    attach_distribution_sketches,
+    detect_data_drift,
+    load_run_column_profiles,
+    save_run_sketches,
+)
 from datapulse.exceptions import DataPulseError, ExitCode
 from datapulse.ingestion import ingest_file, iter_file_chunks
 from datapulse.models import RunMeta
@@ -56,9 +62,11 @@ def _finalize_and_report(
     quarantine: bool,
     mode_label: str,
 ) -> int:
-    """Exécute la détection statistique, la réconciliation, l'export et la persistance."""
+    """Exécute la détection statistique, la détection de drift, l'export et la persistance."""
     run_id = tracker.telemetry.run_id
     timestamp = tracker.telemetry.started_at
+
+    attach_distribution_sketches(profile, df)
 
     with tracker.track_step("anomaly_detection", rows_in=len(df)) as step:
         anomalies, warnings = detect_anomalies(df, config)
@@ -68,12 +76,24 @@ def _finalize_and_report(
         findings, annotated_df = reconcile_findings(df, violations, anomalies)
         step.rows_out = len(findings)
 
-    drifts: list[dict[str, Any]] = []
+    schema_drifts: list[dict[str, Any]] = []
+    data_drifts: list[dict[str, Any]] = []
     if previous_profile is not None:
-        _, baseline_cols = previous_profile
-        drifts = detect_schema_drift(profile, baseline_cols)
-        for d in drifts:
+        prev_run_id, baseline_cols = previous_profile
+        schema_drifts = detect_schema_drift(profile, baseline_cols)
+        for d in schema_drifts:
             warnings.append(f"[SCHEMA DRIFT] {d['explanation']}")
+
+        current_cols = profile.get("columns", [])
+        if isinstance(current_cols, list):
+            baseline_sketches = load_run_column_profiles(storage.db_path, prev_run_id)
+            data_drifts = detect_data_drift(
+                current_cols, baseline_sketches if baseline_sketches else baseline_cols
+            )
+            for dd in data_drifts:
+                warnings.append(f"[DATA DRIFT:{dd['severity']}] {dd['explanation']}")
+
+    critical_data_drifts = [d for d in data_drifts if d.get("severity") == "CRITICAL"]
 
     quarantined_records: list[dict[str, Any]] = []
     clean_file: Path | None = None
@@ -97,14 +117,15 @@ def _finalize_and_report(
     _, peak_bytes = tracemalloc.get_traced_memory()
     peak_memory_kb = round(peak_bytes / 1024, 2)
 
-    status = "QUALITY_ALERT" if (strict and (findings or drifts)) else "SUCCESS"
+    has_strict_alert = bool(findings or schema_drifts or critical_data_drifts)
+    status = "QUALITY_ALERT" if (strict and has_strict_alert) else "SUCCESS"
     meta_obj = RunMeta(
         run_id=run_id,
         timestamp=timestamp,
         domain=resolved_domain,
         source_file=source_label,
         file_hash_sha256=file_hash,
-        config_version=str(config.get("version", "7.0")),
+        config_version=str(config.get("version", "8.0")),
         row_count=row_count,
         duration_ms=telemetry.total_duration_ms,
         peak_memory_kb=peak_memory_kb,
@@ -114,6 +135,7 @@ def _finalize_and_report(
 
     steps_payload = [s.to_dict() for s in telemetry.steps]
     storage.save_run(run_meta, profile, findings, steps=steps_payload)
+    save_run_sketches(storage.db_path, run_id, profile)
     if quarantine and quarantined_records:
         storage.save_quarantine_rows(run_id, resolved_domain, quarantined_records)
     if benchmark_metrics:
@@ -129,12 +151,13 @@ def _finalize_and_report(
         reports_dir=reports_dir,
     )
 
-    print(f"\n=== DataPulse V7 | Run {run_id[:8]} ({resolved_domain} | {mode_label}) ===")
+    print(f"\n=== DataPulse V8 | Run {run_id[:8]} ({resolved_domain} | {mode_label}) ===")
     print(f"Source      : {source_label} ({row_count} lignes)")
     print(f"Complétude  : {profile['completeness_pct']}%")
     print(
         f"Incidents   : {len(findings)} uniques | "
-        f"Dérives schéma : {len(drifts)} | Statut : {status}"
+        f"Schema drift : {len(schema_drifts)} | Data drift : {len(data_drifts)} | "
+        f"Statut : {status}"
     )
     if quarantine:
         print(
@@ -151,7 +174,7 @@ def _finalize_and_report(
     print(f"Rapport HTML: {artifacts['html']}")
     print(f"Données ann.: {processed_file}\n")
 
-    if strict and (findings or drifts):
+    if strict and has_strict_alert:
         return int(ExitCode.QUALITY_ALERT)
     return int(ExitCode.SUCCESS)
 
@@ -484,6 +507,10 @@ def diff_runs(
     rb = comparison["run_b"]
     deltas = comparison["deltas"]
 
+    cols_a = load_run_column_profiles(db_path, str(ra["run_id"]))
+    cols_b = load_run_column_profiles(db_path, str(rb["run_id"]))
+    data_drifts = detect_data_drift(cols_b, cols_a)
+
     print(f"\n=== Diff DataPulse : {ra['run_id'][:8]} (base) -> {rb['run_id'][:8]} (cible) ===")
     print(f"Domaine    : {rb['domain']}")
     print(f"Lignes     : {ra['row_count']} -> {rb['row_count']} ({deltas['row_count_delta']:+d})")
@@ -503,6 +530,13 @@ def diff_runs(
             print(f"  - [{d['severity']}] {d['drift_type']} : {d['explanation']}")
     else:
         print("\nSchéma     : Aucune dérive structurelle détectée.")
+
+    if data_drifts:
+        print("\nDérives statistiques de données (Data Drift) :")
+        for dd in data_drifts:
+            print(f"  - [{dd['severity']}] {dd['explanation']}")
+    else:
+        print("Data Drift : Aucune dérive statistique détectée.")
     print()
     return int(ExitCode.SUCCESS)
 
@@ -572,7 +606,7 @@ def serve_api(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="datapulse",
-        description="DataPulse V7 — Observatoire générique de qualité et d'anomalies de données",
+        description="DataPulse V8 — Observatoire générique de qualité et d'anomalies de données",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -638,7 +672,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_insp = sub.add_parser("inspect", help="Affiche la télémétrie détaillée d'un run")
     p_insp.add_argument("--run-id", required=True, help="ID complet ou préfixe (8 caractères)")
 
-    p_diff = sub.add_parser("diff", help="Compare deux exécutions et détecte le schema drift")
+    p_diff = sub.add_parser("diff", help="Compare deux exécutions (Schema & Data Drift)")
     p_diff.add_argument("--run-a", required=False, help="ID du run de référence (base)")
     p_diff.add_argument("--run-b", required=False, help="ID du run cible")
     p_diff.add_argument(

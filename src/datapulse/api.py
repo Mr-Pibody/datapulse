@@ -1,4 +1,4 @@
-"""API REST FastAPI et endpoints d'observabilité DataPulse V7."""
+"""API REST FastAPI et endpoints d'observabilité DataPulse V8."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from datapulse.cli import run_pipeline, run_sql_pipeline
 from datapulse.config_loader import ConfigError
 from datapulse.dashboard import render_dashboard_html
+from datapulse.drift import detect_data_drift, load_run_column_profiles
 from datapulse.exceptions import DataPulseError, StorageTransactionError
 from datapulse.schema_inference import list_available_domains
 from datapulse.sql_connector import list_sql_tables
@@ -40,8 +41,8 @@ def create_app(
     """Construit l'instance FastAPI configurée pour une base SQLite donnée."""
     app = FastAPI(
         title="DataPulse API",
-        version="7.0.0",
-        description="API REST de gouvernance, qualité et observabilité des données (Fichiers & SQL).",
+        version="8.0.0",
+        description="API REST de gouvernance, qualité, Data Drift et observabilité des données.",
     )
 
     def _storage() -> DataPulseStorage:
@@ -56,7 +57,7 @@ def create_app(
         storage = _storage()
         return {
             "status": "ok",
-            "version": "7.0.0",
+            "version": "8.0.0",
             "db_path": str(storage.db_path),
         }
 
@@ -119,9 +120,16 @@ def create_app(
             )
 
         try:
-            return storage.compare_runs(run_a, run_b)
+            comparison = storage.compare_runs(run_a, run_b)
         except StorageTransactionError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        full_a = str(comparison["run_a"]["run_id"])
+        full_b = str(comparison["run_b"]["run_id"])
+        cols_a = load_run_column_profiles(db_path, full_a)
+        cols_b = load_run_column_profiles(db_path, full_b)
+        comparison["data_drifts"] = detect_data_drift(cols_b, cols_a)
+        return comparison
 
     @app.get("/api/quarantine")
     def get_quarantine(
