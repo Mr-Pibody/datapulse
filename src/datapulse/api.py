@@ -1,4 +1,4 @@
-"""API REST FastAPI et endpoints d'observabilité DataPulse V6."""
+"""API REST FastAPI et endpoints d'observabilité DataPulse V7."""
 
 from __future__ import annotations
 
@@ -9,13 +9,26 @@ from typing import Any
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import HTMLResponse
+from pydantic import BaseModel
 
-from datapulse.cli import run_pipeline
+from datapulse.cli import run_pipeline, run_sql_pipeline
 from datapulse.config_loader import ConfigError
 from datapulse.dashboard import render_dashboard_html
 from datapulse.exceptions import DataPulseError, StorageTransactionError
 from datapulse.schema_inference import list_available_domains
+from datapulse.sql_connector import list_sql_tables
 from datapulse.storage import DataPulseStorage
+
+
+class SqlRunRequest(BaseModel):
+    """Charge utile JSON pour déclencher un audit qualité sur une source SQL."""
+
+    uri: str
+    table: str | None = None
+    query: str | None = None
+    domain: str = "auto"
+    quarantine: bool = False
+    strict: bool = False
 
 
 def create_app(
@@ -27,8 +40,8 @@ def create_app(
     """Construit l'instance FastAPI configurée pour une base SQLite donnée."""
     app = FastAPI(
         title="DataPulse API",
-        version="6.0.0",
-        description="API REST de gouvernance, qualité et observabilité des données.",
+        version="7.0.0",
+        description="API REST de gouvernance, qualité et observabilité des données (Fichiers & SQL).",
     )
 
     def _storage() -> DataPulseStorage:
@@ -43,7 +56,7 @@ def create_app(
         storage = _storage()
         return {
             "status": "ok",
-            "version": "6.0.0",
+            "version": "7.0.0",
             "db_path": str(storage.db_path),
         }
 
@@ -58,6 +71,14 @@ def create_app(
             *[{"domain": d["domain"], "description": d["description"]} for d in configured],
         ]
         return {"count": len(items), "domains": items}
+
+    @app.get("/api/sql/tables")
+    def inspect_sql_tables(uri: str = Query(..., min_length=3)) -> dict[str, Any]:
+        try:
+            tables = list_sql_tables(uri)
+        except DataPulseError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"count": len(tables), "tables": tables}
 
     @app.get("/api/runs")
     def list_runs(
@@ -139,6 +160,31 @@ def create_app(
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         lookup_domain = None if domain.strip().lower() == "auto" else domain
+        latest = _storage().get_history(domain=lookup_domain, limit=1)
+        return {
+            "exit_code": exit_code,
+            "run": latest[0] if latest else None,
+        }
+
+    @app.post("/api/runs/sql")
+    def run_sql_endpoint(payload: SqlRunRequest) -> dict[str, Any]:
+        try:
+            exit_code = run_sql_pipeline(
+                uri=payload.uri,
+                domain=payload.domain,
+                table=payload.table,
+                query=payload.query,
+                db_path=db_path,
+                reports_dir=reports_dir,
+                processed_dir=processed_dir,
+                configs_dir=configs_dir,
+                strict=payload.strict,
+                quarantine=payload.quarantine,
+            )
+        except (DataPulseError, ConfigError, FileNotFoundError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        lookup_domain = None if payload.domain.strip().lower() == "auto" else payload.domain
         latest = _storage().get_history(domain=lookup_domain, limit=1)
         return {
             "exit_code": exit_code,

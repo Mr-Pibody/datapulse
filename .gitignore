@@ -13,3 +13,9 @@ data/processed/*.csv
 data/raw/*_annotated.csv
 
 data/raw/fixed_*.csv
+
+data/raw/alien.csv
+data/raw/capteurs_iot.csv
+data/raw/livraisons.csv
+data/raw/test.csv
+data/raw/to_fix.csv

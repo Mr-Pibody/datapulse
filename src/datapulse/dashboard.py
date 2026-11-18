@@ -1,4 +1,4 @@
-"""Dashboard web autonome pour l'observatoire DataPulse V6."""
+"""Dashboard web autonome pour l'observatoire DataPulse V7."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ def render_dashboard_html() -> str:
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>DataPulse V6 — Observatoire Qualité &amp; Anomalies</title>
+  <title>DataPulse V7 — Observatoire Qualité &amp; Anomalies</title>
   <style>
     :root {
       --bg: #0b1120;
@@ -78,7 +78,7 @@ def render_dashboard_html() -> str:
       gap: 0.75rem;
       align-items: center;
     }
-    input[type="file"], select {
+    input[type="file"], input[type="text"], select {
       background: var(--card);
       color: var(--text);
       border: 1px solid var(--border);
@@ -104,7 +104,7 @@ def render_dashboard_html() -> str:
     th { color: var(--muted); font-weight: 600; }
     .status-ok { color: var(--ok); font-weight: 600; }
     .status-alert { color: var(--warn); font-weight: 600; }
-    #upload-feedback { margin-top: 0.75rem; font-size: 0.9rem; color: var(--muted); }
+    #upload-feedback, #sql-feedback { margin-top: 0.75rem; font-size: 0.9rem; color: var(--muted); }
   </style>
 </head>
 <body>
@@ -118,7 +118,7 @@ def render_dashboard_html() -> str:
       </div>
       <div style="display: flex; gap: 0.75rem; align-items: center;">
         <a href="/docs" style="color: var(--accent); text-decoration: none;">OpenAPI /docs</a>
-        <span class="badge">v6.0.0</span>
+        <span class="badge">v7.0.0</span>
       </div>
     </header>
 
@@ -142,7 +142,7 @@ def render_dashboard_html() -> str:
     </section>
 
     <section class="panel">
-      <h2>Exécuter un pipeline d'analyse</h2>
+      <h2>Exécuter un pipeline sur un fichier</h2>
       <form class="upload-bar" id="run-form">
         <input type="file" id="file-input" required />
         <select id="domain-select">
@@ -155,6 +155,23 @@ def render_dashboard_html() -> str:
         <button type="submit">Lancer l'analyse</button>
       </form>
       <div id="upload-feedback"></div>
+    </section>
+
+    <section class="panel">
+      <h2>Auditer une base de données SQL</h2>
+      <form class="upload-bar" id="sql-form">
+        <input type="text" id="sql-uri" placeholder="sqlite:///db/source.sqlite" style="min-width: 240px;" required />
+        <input type="text" id="sql-table" placeholder="Nom de table (ex: ventes)" required />
+        <select id="sql-domain-select">
+          <option value="auto">auto (Détection automatique)</option>
+        </select>
+        <label style="display: flex; align-items: center; gap: 0.4rem; font-size: 0.9rem;">
+          <input type="checkbox" id="sql-quarantine-check" checked />
+          Isoler en quarantaine
+        </label>
+        <button type="submit">Auditer SQL</button>
+      </form>
+      <div id="sql-feedback"></div>
     </section>
 
     <section class="panel">
@@ -179,15 +196,16 @@ def render_dashboard_html() -> str:
     async function loadDomains() {
       const res = await fetch('/api/domains');
       const data = await res.json();
-      const select = document.getElementById('domain-select');
       const items = data.domains || [];
       if (items.length > 0) {
-        select.innerHTML = items.map(d => {
+        const optionsHtml = items.map(d => {
           const label = d.domain === 'auto'
             ? 'auto — Détection / Inférence automatique'
             : `${d.domain} — ${d.description}`;
           return `<option value="${d.domain}">${label}</option>`;
         }).join('');
+        document.getElementById('domain-select').innerHTML = optionsHtml;
+        document.getElementById('sql-domain-select').innerHTML = optionsHtml;
       }
     }
 
@@ -244,6 +262,34 @@ def render_dashboard_html() -> str:
       } else {
         feedback.style.color = 'var(--err)';
         feedback.textContent = `Erreur : ${data.detail || 'Échec du pipeline'}`;
+      }
+    });
+
+    document.getElementById('sql-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const feedback = document.getElementById('sql-feedback');
+      const payload = {
+        uri: document.getElementById('sql-uri').value,
+        table: document.getElementById('sql-table').value,
+        domain: document.getElementById('sql-domain-select').value,
+        quarantine: document.getElementById('sql-quarantine-check').checked,
+      };
+      feedback.style.color = 'var(--muted)';
+      feedback.textContent = 'Extraction et audit SQL en cours...';
+      const resp = await fetch('/api/runs/sql', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await resp.json();
+      if (resp.ok) {
+        feedback.style.color = 'var(--ok)';
+        feedback.textContent =
+          `Audit SQL ${data.run.run_id.slice(0, 8)} (${data.run.domain}) terminé : ${data.run.findings_count} incident(s).`;
+        await refreshDashboard();
+      } else {
+        feedback.style.color = 'var(--err)';
+        feedback.textContent = `Erreur SQL : ${data.detail || 'Échec de connexion'}`;
       }
     });
 

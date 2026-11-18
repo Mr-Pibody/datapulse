@@ -1,4 +1,4 @@
-"""Interface en ligne de commande DataPulse V6."""
+"""Interface en ligne de commande DataPulse V7."""
 
 from __future__ import annotations
 
@@ -26,8 +26,134 @@ from datapulse.quarantine import (
 from datapulse.reconciler import reconcile_findings
 from datapulse.reporter import generate_reports
 from datapulse.schema_inference import generate_domain_yaml, resolve_domain
+from datapulse.sql_connector import (
+    build_select_sql,
+    compute_sql_fingerprint,
+    extract_sql_to_dataframe,
+    iter_sql_chunks,
+)
 from datapulse.storage import DataPulseStorage
 from datapulse.validator import validate_dataframe
+
+
+def _finalize_and_report(
+    *,
+    tracker: PipelineTracker,
+    storage: DataPulseStorage,
+    resolved_domain: str,
+    config: dict[str, Any],
+    source_label: str,
+    file_hash: str,
+    row_count: int,
+    profile: dict[str, Any],
+    df: pd.DataFrame,
+    violations: list[dict[str, Any]],
+    previous_profile: tuple[str, list[dict[str, Any]]] | None,
+    ref_path: str | None,
+    reports_dir: str,
+    processed_dir: str,
+    strict: bool,
+    quarantine: bool,
+    mode_label: str,
+) -> int:
+    """Exécute la détection statistique, la réconciliation, l'export et la persistance."""
+    run_id = tracker.telemetry.run_id
+    timestamp = tracker.telemetry.started_at
+
+    with tracker.track_step("anomaly_detection", rows_in=len(df)) as step:
+        anomalies, warnings = detect_anomalies(df, config)
+        step.rows_out = len(anomalies)
+
+    with tracker.track_step("reconciliation", rows_in=len(df)) as step:
+        findings, annotated_df = reconcile_findings(df, violations, anomalies)
+        step.rows_out = len(findings)
+
+    drifts: list[dict[str, Any]] = []
+    if previous_profile is not None:
+        _, baseline_cols = previous_profile
+        drifts = detect_schema_drift(profile, baseline_cols)
+        for d in drifts:
+            warnings.append(f"[SCHEMA DRIFT] {d['explanation']}")
+
+    quarantined_records: list[dict[str, Any]] = []
+    clean_file: Path | None = None
+    with tracker.track_step("export_processed", rows_in=len(annotated_df)) as step:
+        out_processed = Path(processed_dir)
+        out_processed.mkdir(parents=True, exist_ok=True)
+        processed_file = out_processed / f"{resolved_domain}_{run_id[:8]}_annotated.csv"
+        annotated_df.to_csv(processed_file, index=False)
+        if quarantine:
+            clean_df, quarantined_records = partition_clean_and_quarantine(annotated_df, findings)
+            clean_file = out_processed / f"{resolved_domain}_{run_id[:8]}_clean.csv"
+            clean_df.to_csv(clean_file, index=False)
+        step.rows_out = len(annotated_df)
+
+    benchmark_metrics = None
+    if ref_path:
+        with tracker.track_step("benchmark", rows_in=row_count):
+            benchmark_metrics = evaluate_against_reference(df, ref_path, findings, resolved_domain)
+
+    telemetry = tracker.finalize()
+    _, peak_bytes = tracemalloc.get_traced_memory()
+    peak_memory_kb = round(peak_bytes / 1024, 2)
+
+    status = "QUALITY_ALERT" if (strict and (findings or drifts)) else "SUCCESS"
+    meta_obj = RunMeta(
+        run_id=run_id,
+        timestamp=timestamp,
+        domain=resolved_domain,
+        source_file=source_label,
+        file_hash_sha256=file_hash,
+        config_version=str(config.get("version", "7.0")),
+        row_count=row_count,
+        duration_ms=telemetry.total_duration_ms,
+        peak_memory_kb=peak_memory_kb,
+        status=status,
+    )
+    run_meta = meta_obj.to_dict()
+
+    steps_payload = [s.to_dict() for s in telemetry.steps]
+    storage.save_run(run_meta, profile, findings, steps=steps_payload)
+    if quarantine and quarantined_records:
+        storage.save_quarantine_rows(run_id, resolved_domain, quarantined_records)
+    if benchmark_metrics:
+        storage.save_benchmark(run_id, benchmark_metrics)
+
+    artifacts = generate_reports(
+        run_meta=run_meta,
+        profile=profile,
+        findings=findings,
+        warnings=warnings,
+        df=df,
+        benchmark=benchmark_metrics,
+        reports_dir=reports_dir,
+    )
+
+    print(f"\n=== DataPulse V7 | Run {run_id[:8]} ({resolved_domain} | {mode_label}) ===")
+    print(f"Source      : {source_label} ({row_count} lignes)")
+    print(f"Complétude  : {profile['completeness_pct']}%")
+    print(
+        f"Incidents   : {len(findings)} uniques | "
+        f"Dérives schéma : {len(drifts)} | Statut : {status}"
+    )
+    if quarantine:
+        print(
+            f"Quarantaine : {len(quarantined_records)} ligne(s) isolée(s) | "
+            f"Export sain : {clean_file}"
+        )
+    print(f"Performance : {telemetry.total_duration_ms} ms | Mémoire max : {peak_memory_kb} Ko")
+    if benchmark_metrics:
+        print(
+            f"Benchmark   : Précision={benchmark_metrics['precision'] * 100:.1f}% | "
+            f"Rappel={benchmark_metrics['recall'] * 100:.1f}% | "
+            f"F1={benchmark_metrics['f1_score'] * 100:.1f}%"
+        )
+    print(f"Rapport HTML: {artifacts['html']}")
+    print(f"Données ann.: {processed_file}\n")
+
+    if strict and (findings or drifts):
+        return int(ExitCode.QUALITY_ALERT)
+    return int(ExitCode.SUCCESS)
 
 
 def run_pipeline(
@@ -47,7 +173,6 @@ def run_pipeline(
     logger = get_structured_logger(enabled=json_logs)
     tracker = PipelineTracker(pipeline_name=f"datapulse.{domain}", logger=logger)
     run_id = tracker.telemetry.run_id
-    timestamp = tracker.telemetry.started_at
 
     tracemalloc.start()
     try:
@@ -121,106 +246,148 @@ def run_pipeline(
                 step.rows_out = len(violations)
 
         previous_profile = storage.get_previous_run_profile(resolved_domain, exclude_run_id=run_id)
-
-        with tracker.track_step("anomaly_detection", rows_in=len(df)) as step:
-            anomalies, warnings = detect_anomalies(df, config)
-            step.rows_out = len(anomalies)
-
-        with tracker.track_step("reconciliation", rows_in=len(df)) as step:
-            findings, annotated_df = reconcile_findings(df, violations, anomalies)
-            step.rows_out = len(findings)
-
-        drifts: list[dict[str, Any]] = []
-        if previous_profile is not None:
-            _, baseline_cols = previous_profile
-            drifts = detect_schema_drift(profile, baseline_cols)
-            for d in drifts:
-                warnings.append(f"[SCHEMA DRIFT] {d['explanation']}")
-
-        quarantined_records: list[dict[str, Any]] = []
-        clean_file: Path | None = None
-        with tracker.track_step("export_processed", rows_in=len(annotated_df)) as step:
-            out_processed = Path(processed_dir)
-            out_processed.mkdir(parents=True, exist_ok=True)
-            processed_file = out_processed / f"{resolved_domain}_{run_id[:8]}_annotated.csv"
-            annotated_df.to_csv(processed_file, index=False)
-            if quarantine:
-                clean_df, quarantined_records = partition_clean_and_quarantine(
-                    annotated_df, findings
-                )
-                clean_file = out_processed / f"{resolved_domain}_{run_id[:8]}_clean.csv"
-                clean_df.to_csv(clean_file, index=False)
-            step.rows_out = len(annotated_df)
-
-        benchmark_metrics = None
-        if ref_path:
-            with tracker.track_step("benchmark", rows_in=row_count):
-                benchmark_metrics = evaluate_against_reference(
-                    df, ref_path, findings, resolved_domain
-                )
-
-        telemetry = tracker.finalize()
-        _, peak_bytes = tracemalloc.get_traced_memory()
-        peak_memory_kb = round(peak_bytes / 1024, 2)
-
-        status = "QUALITY_ALERT" if (strict and (findings or drifts)) else "SUCCESS"
-        meta_obj = RunMeta(
-            run_id=run_id,
-            timestamp=timestamp,
-            domain=resolved_domain,
-            source_file=str(raw_copy_path),
-            file_hash_sha256=file_hash,
-            config_version=str(config.get("version", "6.0")),
-            row_count=row_count,
-            duration_ms=telemetry.total_duration_ms,
-            peak_memory_kb=peak_memory_kb,
-            status=status,
-        )
-        run_meta = meta_obj.to_dict()
-
-        steps_payload = [s.to_dict() for s in telemetry.steps]
-        storage.save_run(run_meta, profile, findings, steps=steps_payload)
-        if quarantine and quarantined_records:
-            storage.save_quarantine_rows(run_id, resolved_domain, quarantined_records)
-        if benchmark_metrics:
-            storage.save_benchmark(run_id, benchmark_metrics)
-
-        artifacts = generate_reports(
-            run_meta=run_meta,
-            profile=profile,
-            findings=findings,
-            warnings=warnings,
-            df=df,
-            benchmark=benchmark_metrics,
-            reports_dir=reports_dir,
-        )
-
         mode_label = f"streaming={chunk_size}" if chunk_size else "batch"
-        print(f"\n=== DataPulse V6 | Run {run_id[:8]} ({resolved_domain} | {mode_label}) ===")
-        print(f"Fichier     : {raw_copy_path} ({row_count} lignes)")
-        print(f"Complétude  : {profile['completeness_pct']}%")
-        print(
-            f"Incidents   : {len(findings)} uniques | "
-            f"Dérives schéma : {len(drifts)} | Statut : {status}"
-        )
-        if quarantine:
-            print(
-                f"Quarantaine : {len(quarantined_records)} ligne(s) isolée(s) | "
-                f"Export sain : {clean_file}"
-            )
-        print(f"Performance : {telemetry.total_duration_ms} ms | Mémoire max : {peak_memory_kb} Ko")
-        if benchmark_metrics:
-            print(
-                f"Benchmark   : Précision={benchmark_metrics['precision'] * 100:.1f}% | "
-                f"Rappel={benchmark_metrics['recall'] * 100:.1f}% | "
-                f"F1={benchmark_metrics['f1_score'] * 100:.1f}%"
-            )
-        print(f"Rapport HTML: {artifacts['html']}")
-        print(f"Données ann.: {processed_file}\n")
 
-        if strict and (findings or drifts):
-            return int(ExitCode.QUALITY_ALERT)
-        return int(ExitCode.SUCCESS)
+        return _finalize_and_report(
+            tracker=tracker,
+            storage=storage,
+            resolved_domain=resolved_domain,
+            config=config,
+            source_label=str(raw_copy_path),
+            file_hash=file_hash,
+            row_count=row_count,
+            profile=profile,
+            df=df,
+            violations=violations,
+            previous_profile=previous_profile,
+            ref_path=ref_path,
+            reports_dir=reports_dir,
+            processed_dir=processed_dir,
+            strict=strict,
+            quarantine=quarantine,
+            mode_label=mode_label,
+        )
+    finally:
+        if tracemalloc.is_tracing():
+            tracemalloc.stop()
+
+
+def run_sql_pipeline(
+    uri: str,
+    domain: str,
+    *,
+    table: str | None = None,
+    query: str | None = None,
+    db_path: str = "db/datapulse.sqlite",
+    reports_dir: str = "reports",
+    processed_dir: str = "data/processed",
+    configs_dir: str = "configs",
+    strict: bool = False,
+    json_logs: bool = False,
+    chunk_size: int | None = None,
+    quarantine: bool = False,
+) -> int:
+    """Exécute le pipeline qualité DataPulse directement sur une table ou requête SQL."""
+    logger = get_structured_logger(enabled=json_logs)
+    tracker = PipelineTracker(pipeline_name=f"datapulse.sql.{domain}", logger=logger)
+    run_id = tracker.telemetry.run_id
+
+    tracemalloc.start()
+    try:
+        storage = DataPulseStorage(db_path=db_path)
+        sql_stmt, _ = build_select_sql(table=table, query=query)
+        resolved_domain = domain
+        config: dict[str, Any] = {}
+
+        if chunk_size is not None:
+            with tracker.track_step("sql_streaming_profile_validate") as step:
+                source_label, chunk_iter = iter_sql_chunks(
+                    uri, table=table, query=query, chunk_size=chunk_size
+                )
+                s_profiler = StreamingProfiler()
+                all_violations: list[dict[str, Any]] = []
+                sample_frames: list[pd.DataFrame] = []
+                sampled_rows = 0
+                max_sample_rows = 50_000
+                contract_resolved = False
+
+                for offset, chunk in chunk_iter:
+                    if not contract_resolved:
+                        resolved_domain, config = resolve_domain(
+                            chunk, domain, configs_dir=configs_dir
+                        )
+                        tracker.telemetry.pipeline_name = f"datapulse.{resolved_domain}"
+                        contract_resolved = True
+
+                    s_profiler.update(chunk)
+                    chunk_violations = validate_dataframe(chunk, config)
+                    for v in chunk_violations:
+                        v["row_index"] = int(v["row_index"]) + offset
+                        all_violations.append(v)
+                    if sampled_rows < max_sample_rows:
+                        take = chunk.iloc[: max_sample_rows - sampled_rows]
+                        sample_frames.append(take)
+                        sampled_rows += len(take)
+
+                if not contract_resolved:
+                    resolved_domain, config = resolve_domain(
+                        pd.DataFrame(), domain, configs_dir=configs_dir
+                    )
+
+                profile = s_profiler.finalize()
+                row_count = int(profile["row_count"])
+                df = (
+                    pd.concat(sample_frames, ignore_index=True) if sample_frames else pd.DataFrame()
+                )
+                violations = all_violations
+                file_hash = compute_sql_fingerprint(
+                    uri, sql_stmt, row_count, [str(c) for c in df.columns]
+                )
+                step.rows_in = row_count
+                step.rows_out = row_count
+        else:
+            with tracker.track_step("sql_extraction") as step:
+                df, source_label, file_hash = extract_sql_to_dataframe(
+                    uri, table=table, query=query
+                )
+                row_count = len(df)
+                step.rows_in = row_count
+                step.rows_out = row_count
+
+            with tracker.track_step("config_resolution"):
+                resolved_domain, config = resolve_domain(df, domain, configs_dir=configs_dir)
+                tracker.telemetry.pipeline_name = f"datapulse.{resolved_domain}"
+
+            with tracker.track_step("profiling", rows_in=row_count) as step:
+                profile = profile_dataframe(df)
+                step.rows_out = len(profile.get("columns", []))
+
+            with tracker.track_step("validation", rows_in=row_count) as step:
+                violations = validate_dataframe(df, config)
+                step.rows_out = len(violations)
+
+        previous_profile = storage.get_previous_run_profile(resolved_domain, exclude_run_id=run_id)
+        mode_label = f"sql-streaming={chunk_size}" if chunk_size else "sql-batch"
+
+        return _finalize_and_report(
+            tracker=tracker,
+            storage=storage,
+            resolved_domain=resolved_domain,
+            config=config,
+            source_label=source_label,
+            file_hash=file_hash,
+            row_count=row_count,
+            profile=profile,
+            df=df,
+            violations=violations,
+            previous_profile=previous_profile,
+            ref_path=None,
+            reports_dir=reports_dir,
+            processed_dir=processed_dir,
+            strict=strict,
+            quarantine=quarantine,
+            mode_label=mode_label,
+        )
     finally:
         if tracemalloc.is_tracing():
             tracemalloc.stop()
@@ -405,7 +572,7 @@ def serve_api(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="datapulse",
-        description="DataPulse V6 — Observatoire générique de qualité et d'anomalies de données",
+        description="DataPulse V7 — Observatoire générique de qualité et d'anomalies de données",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -440,6 +607,18 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Isole les lignes rejetées dans SQLite et exporte un fichier *_clean.csv",
     )
+
+    p_sql = sub.add_parser("run-sql", help="Audit qualité directement sur une table ou requête SQL")
+    p_sql.add_argument(
+        "--uri", required=True, help="URI de connexion SQL (ex: sqlite:///db/source.sqlite)"
+    )
+    p_sql.add_argument("--table", required=False, help="Nom de la table SQL à analyser")
+    p_sql.add_argument("--query", required=False, help="Requête SQL SELECT en lecture seule")
+    p_sql.add_argument("--domain", default="auto", help="Domaine cible ou 'auto'")
+    p_sql.add_argument("--strict", action="store_true", help="Code retour 1 si anomalie")
+    p_sql.add_argument("--json-logs", action="store_true", help="Logs structurés JSON")
+    p_sql.add_argument("--chunk-size", type=int, default=None, help="Streaming SQL par blocs")
+    p_sql.add_argument("--quarantine", action="store_true", help="Isole les lignes rejetées")
 
     p_init = sub.add_parser(
         "init-config", help="Infère et génère un contrat YAML depuis un fichier de données"
@@ -497,6 +676,17 @@ def main(argv: list[str] | None = None) -> int:
                 file_path=args.file,
                 domain=args.domain,
                 ref_path=args.ref,
+                strict=args.strict,
+                json_logs=args.json_logs,
+                chunk_size=args.chunk_size,
+                quarantine=args.quarantine,
+            )
+        if args.command == "run-sql":
+            return run_sql_pipeline(
+                uri=args.uri,
+                domain=args.domain,
+                table=args.table,
+                query=args.query,
                 strict=args.strict,
                 json_logs=args.json_logs,
                 chunk_size=args.chunk_size,
