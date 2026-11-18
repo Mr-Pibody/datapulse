@@ -21,12 +21,12 @@ def test_api_health_and_dashboard_html(tmp_path: Path) -> None:
     health = client.get("/api/health")
     assert health.status_code == 200
     assert health.json()["status"] == "ok"
-    assert health.json()["version"] == "8.0.0"
+    assert health.json()["version"] == "9.0.0"
 
     home = client.get("/")
     assert home.status_code == 200
     assert "DataPulse" in home.text
-    assert "v8.0.0" in home.text
+    assert "v9.0.0" in home.text
 
 
 def test_api_upload_runs_pipeline_and_lists_history(tmp_path: Path) -> None:

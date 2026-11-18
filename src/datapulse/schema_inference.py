@@ -99,55 +99,10 @@ def list_available_domains(configs_dir: str | Path = "configs") -> list[dict[str
 
 
 def _load_config(domain: str, configs_dir: str | Path = "configs") -> dict[str, Any]:
-    """Charge la configuration d'un domaine en passant le répertoire en positionnel si personnalisé."""
+    """Charge la configuration YAML d'un domaine donné."""
     if str(configs_dir) == "configs":
         return load_domain_config(domain)
     return load_domain_config(domain, str(configs_dir))
-
-
-def resolve_domain(
-    df: pd.DataFrame,
-    requested_domain: str,
-    configs_dir: str | Path = "configs",
-) -> tuple[str, dict[str, Any]]:
-    """Résout le domaine cible (explicite avec vérification, ou auto-détecté)."""
-    if requested_domain.strip().lower() != "auto":
-        config = _load_config(requested_domain, configs_dir)
-        verify_contract_compatibility(df, config, requested_domain)
-        return requested_domain, config
-
-    df_cols = {str(c) for c in df.columns}
-    best_domain: str | None = None
-    best_config: dict[str, Any] | None = None
-    best_score: tuple[float, int] = (0.0, 0)
-
-    for entry in list_available_domains(configs_dir=configs_dir):
-        dom = entry["domain"]
-        try:
-            cfg = _load_config(dom, configs_dir)
-        except Exception:
-            continue
-        expected = extract_expected_columns(cfg)
-        if not expected:
-            continue
-        matched_count = len(expected & df_cols)
-        if matched_count > 0:
-            ratio = matched_count / len(expected)
-            score = (ratio, matched_count)
-            if score > best_score:
-                best_score = score
-                best_domain = dom
-                best_config = cfg
-
-    if best_domain is not None and best_config is not None:
-        return best_domain, best_config
-
-    inferred_cfg = infer_config_from_dataframe(
-        df,
-        domain_name="auto_inferred",
-        description="Contrat généré automatiquement à la volée (--domain auto)",
-    )
-    return "auto_inferred", inferred_cfg
 
 
 def resolve_domain(
@@ -205,7 +160,7 @@ def infer_config_from_dataframe(
     domain_name: str,
     description: str | None = None,
 ) -> dict[str, Any]:
-    """Infère un contrat YAML complet (règles métier + détection statistique) depuis un DataFrame."""
+    """Infère un contrat YAML complet (règles + détection statistique) depuis un DataFrame."""
     rules: list[dict[str, Any]] = []
     numeric_anomaly_cols: list[str] = []
     n_rows = len(df)

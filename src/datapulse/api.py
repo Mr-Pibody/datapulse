@@ -1,4 +1,4 @@
-"""API REST FastAPI et endpoints d'observabilité DataPulse V8."""
+"""API REST FastAPI et endpoints d'observabilité DataPulse V9."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
+from datapulse.alerts import list_alert_history, send_test_alert
 from datapulse.cli import run_pipeline, run_sql_pipeline
 from datapulse.config_loader import ConfigError
 from datapulse.dashboard import render_dashboard_html
@@ -32,6 +33,16 @@ class SqlRunRequest(BaseModel):
     strict: bool = False
 
 
+class AlertTestRequest(BaseModel):
+    """Charge utile JSON pour tester un canal de notification DataPulse."""
+
+    domain: str = "test_domain"
+    webhook_url: str = ""
+    slack_webhook_url: str = ""
+    discord_webhook_url: str = ""
+    webhook_secret: str = ""
+
+
 def create_app(
     db_path: str = "db/datapulse.sqlite",
     reports_dir: str = "reports",
@@ -41,8 +52,8 @@ def create_app(
     """Construit l'instance FastAPI configurée pour une base SQLite donnée."""
     app = FastAPI(
         title="DataPulse API",
-        version="8.0.0",
-        description="API REST de gouvernance, qualité, Data Drift et observabilité des données.",
+        version="9.0.0",
+        description="API REST de gouvernance, qualité, Data Drift et alertes temps réel.",
     )
 
     def _storage() -> DataPulseStorage:
@@ -57,7 +68,7 @@ def create_app(
         storage = _storage()
         return {
             "status": "ok",
-            "version": "8.0.0",
+            "version": "9.0.0",
             "db_path": str(storage.db_path),
         }
 
@@ -139,6 +150,31 @@ def create_app(
     ) -> dict[str, Any]:
         items = _storage().list_quarantine(domain=domain, status=status, limit=limit)
         return {"count": len(items), "items": items}
+
+    @app.get("/api/alerts")
+    def get_alerts(
+        domain: str | None = Query(default=None),
+        limit: int = Query(default=30, ge=1, le=200),
+    ) -> dict[str, Any]:
+        items = list_alert_history(db_path=db_path, domain=domain, limit=limit)
+        return {"count": len(items), "alerts": items}
+
+    @app.post("/api/alerts/test")
+    def test_alerts_endpoint(payload: AlertTestRequest) -> dict[str, Any]:
+        results = send_test_alert(
+            db_path=db_path,
+            domain=payload.domain,
+            webhook_url=payload.webhook_url,
+            slack_webhook_url=payload.slack_webhook_url,
+            discord_webhook_url=payload.discord_webhook_url,
+            webhook_secret=payload.webhook_secret,
+        )
+        if not results:
+            raise HTTPException(
+                status_code=400,
+                detail="Aucun canal de notification fourni ou configuré.",
+            )
+        return {"count": len(results), "results": results}
 
     @app.post("/api/runs/upload")
     async def upload_and_run(

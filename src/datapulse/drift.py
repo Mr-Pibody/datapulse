@@ -49,7 +49,7 @@ def build_column_sketch(series: pd.Series[Any]) -> dict[str, Any]:
 
     return {
         "kind": "categorical",
-        "count": int(len(clean)),
+        "count": len(clean),
         "probs": top_probs,
     }
 
@@ -179,7 +179,7 @@ def detect_data_drift(
     psi_warning: float = 0.10,
     psi_critical: float = 0.25,
 ) -> list[dict[str, Any]]:
-    """Détecte les dérives statistiques de distribution entre baseline (run A) et courant (run B)."""
+    """Détecte les dérives statistiques entre la baseline (run A) et le run courant (B)."""
     base_map: dict[str, dict[str, Any]] = {}
     for col in baseline_cols:
         name = str(col.get("name") or col.get("column_name") or "")

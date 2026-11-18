@@ -19,3 +19,9 @@ data/raw/capteurs_iot.csv
 data/raw/livraisons.csv
 data/raw/test.csv
 data/raw/to_fix.csv
+
+data/raw/batch1.csv
+data/raw/batch2.csv
+data/raw/v1.csv
+data/raw/v2.csv
+data/raw/iot_data.csv

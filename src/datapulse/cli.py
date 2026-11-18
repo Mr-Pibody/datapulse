@@ -1,4 +1,4 @@
-"""Interface en ligne de commande DataPulse V8."""
+"""Interface en ligne de commande DataPulse V9."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from typing import Any
 
 import pandas as pd
 
+from datapulse.alerts import dispatch_run_alerts, list_alert_history, send_test_alert
 from datapulse.benchmark import evaluate_against_reference
 from datapulse.config_loader import ConfigError
 from datapulse.detector import detect_anomalies
@@ -62,7 +63,7 @@ def _finalize_and_report(
     quarantine: bool,
     mode_label: str,
 ) -> int:
-    """Exécute la détection statistique, la détection de drift, l'export et la persistance."""
+    """Exécute détection statistique, drift, persistance, rapports et notifications."""
     run_id = tracker.telemetry.run_id
     timestamp = tracker.telemetry.started_at
 
@@ -125,7 +126,7 @@ def _finalize_and_report(
         domain=resolved_domain,
         source_file=source_label,
         file_hash_sha256=file_hash,
-        config_version=str(config.get("version", "8.0")),
+        config_version=str(config.get("version", "9.0")),
         row_count=row_count,
         duration_ms=telemetry.total_duration_ms,
         peak_memory_kb=peak_memory_kb,
@@ -141,6 +142,15 @@ def _finalize_and_report(
     if benchmark_metrics:
         storage.save_benchmark(run_id, benchmark_metrics)
 
+    alert_results = dispatch_run_alerts(
+        db_path=storage.db_path,
+        run_meta=run_meta,
+        findings=findings,
+        schema_drifts=schema_drifts,
+        data_drifts=data_drifts,
+        config=config,
+    )
+
     artifacts = generate_reports(
         run_meta=run_meta,
         profile=profile,
@@ -151,7 +161,7 @@ def _finalize_and_report(
         reports_dir=reports_dir,
     )
 
-    print(f"\n=== DataPulse V8 | Run {run_id[:8]} ({resolved_domain} | {mode_label}) ===")
+    print(f"\n=== DataPulse V9 | Run {run_id[:8]} ({resolved_domain} | {mode_label}) ===")
     print(f"Source      : {source_label} ({row_count} lignes)")
     print(f"Complétude  : {profile['completeness_pct']}%")
     print(
@@ -164,6 +174,9 @@ def _finalize_and_report(
             f"Quarantaine : {len(quarantined_records)} ligne(s) isolée(s) | "
             f"Export sain : {clean_file}"
         )
+    if alert_results:
+        summary_alerts = ", ".join(f"{a['channel']}={a['status']}" for a in alert_results)
+        print(f"Alertes     : {summary_alerts}")
     print(f"Performance : {telemetry.total_duration_ms} ms | Mémoire max : {peak_memory_kb} Ko")
     if benchmark_metrics:
         print(
@@ -582,6 +595,57 @@ def run_replay(
     return int(ExitCode.SUCCESS)
 
 
+def alerts_test_cmd(
+    *,
+    domain: str = "test_domain",
+    webhook_url: str = "",
+    slack_url: str = "",
+    discord_url: str = "",
+    secret: str = "",
+    db_path: str = "db/datapulse.sqlite",
+) -> int:
+    results = send_test_alert(
+        db_path=db_path,
+        domain=domain,
+        webhook_url=webhook_url,
+        slack_webhook_url=slack_url,
+        discord_webhook_url=discord_url,
+        webhook_secret=secret,
+    )
+    if not results:
+        print("Aucun canal configuré (--webhook-url, --slack-url, --discord-url ou env).")
+        return int(ExitCode.EXECUTION_ERROR)
+
+    print("\n=== Test des notifications DataPulse V9 ===")
+    has_failure = False
+    for r in results:
+        print(f"  - {r['channel']:<10} : {r['status']} ({r['detail']})")
+        if r["status"] != "SENT":
+            has_failure = True
+    print()
+    return int(ExitCode.EXECUTION_ERROR) if has_failure else int(ExitCode.SUCCESS)
+
+
+def show_alerts_history(
+    domain: str | None = None,
+    limit: int = 20,
+    db_path: str = "db/datapulse.sqlite",
+) -> int:
+    items = list_alert_history(db_path=db_path, domain=domain, limit=limit)
+    if not items:
+        print("Aucune notification enregistrée dans SQLite.")
+        return int(ExitCode.SUCCESS)
+
+    print("\n=== Historique des notifications DataPulse ===")
+    for it in items:
+        print(
+            f"[{str(it['created_at'])[:19]}] {it['domain']:<14} | "
+            f"{it['channel']:<8} | {it['status']:<6} | {it['detail']}"
+        )
+    print()
+    return int(ExitCode.SUCCESS)
+
+
 def serve_api(
     host: str = "127.0.0.1",
     port: int = 8000,
@@ -606,7 +670,7 @@ def serve_api(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="datapulse",
-        description="DataPulse V8 — Observatoire générique de qualité et d'anomalies de données",
+        description="DataPulse V9 — Observatoire générique de qualité et d'anomalies de données",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -692,6 +756,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_rep.add_argument("--file", required=True, help="Chemin vers le CSV corrigé")
     p_rep.add_argument("--domain", required=True, help="Domaine métier cible")
 
+    p_atest = sub.add_parser("alerts-test", help="Envoie une notification de test (Webhook/Slack)")
+    p_atest.add_argument("--domain", default="test_domain", help="Nom de domaine affiché")
+    p_atest.add_argument("--webhook-url", default="", help="URL Webhook JSON générique")
+    p_atest.add_argument("--slack-url", default="", help="URL Slack Incoming Webhook")
+    p_atest.add_argument("--discord-url", default="", help="URL Discord Webhook")
+    p_atest.add_argument("--secret", default="", help="Secret HMAC-SHA256 pour signer le JSON")
+
+    p_ahist = sub.add_parser("alerts-history", help="Affiche l'historique des alertes envoyées")
+    p_ahist.add_argument("--domain", required=False, help="Filtrer par domaine")
+    p_ahist.add_argument("--limit", type=int, default=20, help="Nombre maximal d'entrées")
+
     p_srv = sub.add_parser("serve", help="Démarre l'API REST et le Dashboard Web DataPulse")
     p_srv.add_argument("--host", default="127.0.0.1", help="Adresse d'écoute (défaut: 127.0.0.1)")
     p_srv.add_argument("--port", type=int, default=8000, help="Port HTTP (défaut: 8000)")
@@ -743,6 +818,16 @@ def main(argv: list[str] | None = None) -> int:
             return manage_quarantine(domain=args.domain, status=args.status, export_csv=args.export)
         if args.command == "replay":
             return run_replay(file_path=args.file, domain=args.domain)
+        if args.command == "alerts-test":
+            return alerts_test_cmd(
+                domain=args.domain,
+                webhook_url=args.webhook_url,
+                slack_url=args.slack_url,
+                discord_url=args.discord_url,
+                secret=args.secret,
+            )
+        if args.command == "alerts-history":
+            return show_alerts_history(domain=args.domain, limit=args.limit)
         if args.command == "serve":
             return serve_api(host=args.host, port=args.port, db_path=args.db)
         return int(ExitCode.EXECUTION_ERROR)

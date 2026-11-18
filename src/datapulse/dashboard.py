@@ -1,4 +1,4 @@
-"""Dashboard web autonome pour l'observatoire DataPulse V8."""
+"""Dashboard web autonome pour l'observatoire DataPulse V9."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ def render_dashboard_html() -> str:
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>DataPulse V8 — Observatoire Qualité &amp; Anomalies</title>
+  <title>DataPulse V9 — Observatoire Qualité, SQL, Data Drift &amp; Alertes</title>
   <style>
     :root {
       --bg: #0b1120;
@@ -104,7 +104,7 @@ def render_dashboard_html() -> str:
     th { color: var(--muted); font-weight: 600; }
     .status-ok { color: var(--ok); font-weight: 600; }
     .status-alert { color: var(--warn); font-weight: 600; }
-    #upload-feedback, #sql-feedback { margin-top: 0.75rem; font-size: 0.9rem; color: var(--muted); }
+    .feedback { margin-top: 0.75rem; font-size: 0.9rem; color: var(--muted); }
   </style>
 </head>
 <body>
@@ -113,12 +113,12 @@ def render_dashboard_html() -> str:
       <div>
         <h1>DataPulse</h1>
         <p style="color: var(--muted); font-size: 0.9rem;">
-          Observatoire de qualité, réconciliation et gouvernance des données
+          Observatoire de qualité, Data Drift, SQL et alertes temps réel
         </p>
       </div>
       <div style="display: flex; gap: 0.75rem; align-items: center;">
         <a href="/docs" style="color: var(--accent); text-decoration: none;">OpenAPI /docs</a>
-        <span class="badge">v8.0.0</span>
+        <span class="badge">v9.0.0</span>
       </div>
     </header>
 
@@ -154,13 +154,19 @@ def render_dashboard_html() -> str:
         </label>
         <button type="submit">Lancer l'analyse</button>
       </form>
-      <div id="upload-feedback"></div>
+      <div id="upload-feedback" class="feedback"></div>
     </section>
 
     <section class="panel">
       <h2>Auditer une base de données SQL</h2>
       <form class="upload-bar" id="sql-form">
-        <input type="text" id="sql-uri" placeholder="sqlite:///db/source.sqlite" style="min-width: 240px;" required />
+        <input
+          type="text"
+          id="sql-uri"
+          placeholder="sqlite:///db/source.sqlite"
+          style="min-width: 240px;"
+          required
+        />
         <input type="text" id="sql-table" placeholder="Nom de table (ex: ventes)" required />
         <select id="sql-domain-select">
           <option value="auto">auto (Détection automatique)</option>
@@ -171,7 +177,36 @@ def render_dashboard_html() -> str:
         </label>
         <button type="submit">Auditer SQL</button>
       </form>
-      <div id="sql-feedback"></div>
+      <div id="sql-feedback" class="feedback"></div>
+    </section>
+
+    <section class="panel">
+      <h2>Comparateur Inter-Runs (Schema Drift &amp; Data Drift KS / PSI)</h2>
+      <form class="upload-bar" id="drift-form">
+        <input type="text" id="drift-domain" placeholder="Domaine (ex: commerce)" required />
+        <button type="submit">Comparer les 2 derniers runs</button>
+      </form>
+      <div id="drift-feedback" class="feedback"></div>
+    </section>
+
+    <section class="panel">
+      <h2>Notifications &amp; Webhooks Temps Réel (Slack / Discord / JSON)</h2>
+      <form class="upload-bar" id="alert-form">
+        <select id="alert-channel">
+          <option value="webhook">Webhook JSON</option>
+          <option value="slack">Slack Webhook</option>
+          <option value="discord">Discord Webhook</option>
+        </select>
+        <input
+          type="text"
+          id="alert-url"
+          placeholder="https://hooks.slack.com/services/..."
+          style="min-width: 300px;"
+          required
+        />
+        <button type="submit">Tester la notification</button>
+      </form>
+      <div id="alert-feedback" class="feedback"></div>
     </section>
 
     <section class="panel">
@@ -255,9 +290,10 @@ def render_dashboard_html() -> str:
       const resp = await fetch('/api/runs/upload', { method: 'POST', body: formData });
       const data = await resp.json();
       if (resp.ok) {
+        const rid = data.run.run_id.slice(0, 8);
+        const cnt = data.run.findings_count;
         feedback.style.color = 'var(--ok)';
-        feedback.textContent =
-          `Run ${data.run.run_id.slice(0, 8)} (${data.run.domain}) terminé : ${data.run.findings_count} incident(s).`;
+        feedback.textContent = `Run ${rid} (${data.run.domain}) terminé : ${cnt} incident(s).`;
         await refreshDashboard();
       } else {
         feedback.style.color = 'var(--err)';
@@ -283,13 +319,68 @@ def render_dashboard_html() -> str:
       });
       const data = await resp.json();
       if (resp.ok) {
+        const rid = data.run.run_id.slice(0, 8);
+        const cnt = data.run.findings_count;
         feedback.style.color = 'var(--ok)';
         feedback.textContent =
-          `Audit SQL ${data.run.run_id.slice(0, 8)} (${data.run.domain}) terminé : ${data.run.findings_count} incident(s).`;
+          `Audit SQL ${rid} (${data.run.domain}) terminé : ${cnt} incident(s).`;
         await refreshDashboard();
       } else {
         feedback.style.color = 'var(--err)';
         feedback.textContent = `Erreur SQL : ${data.detail || 'Échec de connexion'}`;
+      }
+    });
+
+    document.getElementById('drift-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const feedback = document.getElementById('drift-feedback');
+      const domain = document.getElementById('drift-domain').value.trim();
+      feedback.style.color = 'var(--muted)';
+      feedback.textContent = 'Calcul KS / PSI / Jensen-Shannon en cours...';
+      const resp = await fetch(`/api/diff?domain=${encodeURIComponent(domain)}`);
+      const data = await resp.json();
+      if (resp.ok) {
+        const sCount = (data.schema_drifts || []).length;
+        const dList = data.data_drifts || [];
+        if (dList.length === 0 && sCount === 0) {
+          feedback.style.color = 'var(--ok)';
+          feedback.textContent = `Aucune dérive détectée sur '${domain}'.`;
+        } else {
+          feedback.style.color = 'var(--warn)';
+          const details = dList.map(d => `[${d.severity}] ${d.explanation}`).join(' | ');
+          feedback.textContent = `Schema drift: ${sCount} | Data drift: ${dList.length} ${details}`;
+        }
+      } else {
+        feedback.style.color = 'var(--err)';
+        feedback.textContent = `Erreur : ${data.detail || 'Impossible de comparer les runs'}`;
+      }
+    });
+
+    document.getElementById('alert-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const feedback = document.getElementById('alert-feedback');
+      const channel = document.getElementById('alert-channel').value;
+      const url = document.getElementById('alert-url').value.trim();
+      const body = { domain: 'dashboard_test' };
+      if (channel === 'slack') body.slack_webhook_url = url;
+      else if (channel === 'discord') body.discord_webhook_url = url;
+      else body.webhook_url = url;
+
+      feedback.style.color = 'var(--muted)';
+      feedback.textContent = 'Envoi de la notification de test...';
+      const resp = await fetch('/api/alerts/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await resp.json();
+      if (resp.ok) {
+        const r = (data.results || [])[0] || {};
+        feedback.style.color = r.status === 'SENT' ? 'var(--ok)' : 'var(--err)';
+        feedback.textContent = `Canal ${r.channel} : ${r.status} (${r.detail})`;
+      } else {
+        feedback.style.color = 'var(--err)';
+        feedback.textContent = `Erreur : ${data.detail || 'Échec de notification'}`;
       }
     });
 
