@@ -742,14 +742,23 @@ def create_app(
         prefix = full_id[:8]
         dom = str(meta.get("domain", ""))
 
+        search_dirs = [Path(processed_dir), Path("data/processed"), Path("data/raw")]
         if kind == "report":
             candidates = sorted(Path(reports_dir).glob(f"*{prefix}*.html"))
             media_type = "text/html"
         elif kind == "clean":
-            candidates = sorted(Path(processed_dir).glob(f"*{prefix}*_clean.csv"))
+            candidates = [
+                p for d in search_dirs if d.exists() for p in sorted(d.glob(f"*{prefix}*_clean.csv"))
+            ]
             media_type = "text/csv"
         elif kind == "annotated":
-            candidates = sorted(Path(processed_dir).glob(f"*{prefix}*_annotated.csv"))
+            candidates = [
+                p for d in search_dirs if d.exists() for p in sorted(d.glob(f"*{prefix}*_annotated.csv"))
+            ]
+            if not candidates:
+                candidates = [
+                p for d in search_dirs if d.exists() for p in sorted(d.glob(f"*{prefix}*_clean.csv"))
+            ]
             media_type = "text/csv"
         else:
             raise HTTPException(
@@ -761,14 +770,13 @@ def create_app(
                 status_code=404,
                 detail=f"Artefact '{kind}' introuvable pour {dom}_{prefix}.",
             )
-        return FileResponse(
-            path=str(candidates[0]), filename=candidates[0].name, media_type=media_type
-        )
+        dl_name = f"{dom}_{prefix}_{kind}.{'html' if kind == 'report' else 'csv'}"
+        return FileResponse(path=str(candidates[0]), filename=dl_name, media_type=media_type)
 
     @app.post("/api/quarantine/resolve", dependencies=[Depends(_require_role("operator"))])
     def resolve_quarantine_row(payload: dict[str, Any]) -> dict[str, Any]:
         """Met a jour le statut d'une ligne en quarantaine (APPROVED / REJECTED)."""
-        row_id = int(payload.get("id", 0))
+        row_id = int(payload.get("quarantine_id") or payload.get("id") or 0)
         new_status = str(payload.get("status", "")).strip().upper()
         if new_status not in {"APPROVED", "REJECTED", "PENDING"}:
             raise HTTPException(
@@ -777,14 +785,15 @@ def create_app(
         import sqlite3
         with sqlite3.connect(db_path) as conn:
             cur = conn.execute(
-                "UPDATE quarantine SET status = ? WHERE id = ?", (new_status, row_id)
+                "UPDATE quarantine_rows SET status = ? WHERE quarantine_id = ?",
+                (new_status, row_id),
             )
             conn.commit()
             if cur.rowcount == 0:
                 raise HTTPException(
                     status_code=404, detail=f"Ligne quarantaine #{row_id} introuvable."
                 )
-        return {"id": row_id, "status": new_status}
+        return {"quarantine_id": row_id, "status": new_status}
 
     return app
 

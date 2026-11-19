@@ -15,6 +15,15 @@
     return k ? { ...extra, "X-API-Key": k } : { ...extra };
   };
 
+  function showToast(msg) {
+    const t = $("toast-box");
+    if (!t) return;
+    t.textContent = msg;
+    t.classList.remove("hidden");
+    clearTimeout(window._toastTimer);
+    window._toastTimer = setTimeout(() => t.classList.add("hidden"), 3200);
+  }
+
   async function api(path, opts = {}) {
     const resp = await fetch(path, {
       ...opts,
@@ -55,6 +64,7 @@
         setKey(res.api_key);
         $("api-key-input").value = res.api_key;
       }
+      showToast("✅ Session Admin activée & catalogue synchronisé");
       await refreshAll();
     } catch (err) {
       $("auth-pill").textContent = "Erreur auth : " + err.message;
@@ -67,25 +77,29 @@
     await refreshAll();
   });
   $("btn-demo-bootstrap").addEventListener("click", activateDemoSession);
+  if ($("btn-banner-bootstrap")) $("btn-banner-bootstrap").addEventListener("click", activateDemoSession);
 
   // ==================== CHARGEMENT GLOBAL ====================
   async function refreshAll() {
     $("api-key-input").value = getKey();
     try {
       await api("/api/health");
-      const [domData, runsData, quarData, catSum] = await Promise.all([
+      const [domData, runsData, quarData, catSum, assetsData] = await Promise.all([
         api("/api/domains"),
         api("/api/runs?limit=40"),
         api("/api/quarantine?status=PENDING&limit=200"),
         api("/api/catalog/summary"),
+        api("/api/catalog/assets"),
       ]);
 
       $("auth-pill").textContent = "Zero-Trust RBAC Actif";
       $("auth-pill").className = "pill pill-ok";
+      if ($("onboarding-banner")) $("onboarding-banner").classList.add("hidden");
 
       cachedDomains = domData.domains || [];
       cachedRuns = runsData.runs || [];
 
+      renderDomainStories(assetsData.assets || []);
       populateDomainSelects(cachedDomains);
       populateRunSelect(cachedRuns);
       renderRunsTable();
@@ -117,15 +131,49 @@
         loadKeysAndAudit(),
       ]);
     } catch (err) {
-      $("auth-pill").textContent = "Clé requise — Cliquez sur Session Démo";
+      $("auth-pill").textContent = "Clé requise";
       $("auth-pill").className = "pill pill-warn";
+      if ($("onboarding-banner")) $("onboarding-banner").classList.remove("hidden");
     }
   }
 
+  function renderDomainStories(assets) {
+    const bar = $("domain-stories-bar");
+    if (!bar) return;
+    if (!assets.length) {
+      bar.innerHTML = "";
+      return;
+    }
+    const allChip = `
+      <div class="story-item" onclick="window.filterByDomainStory('')">
+        <div class="story-ring ok"><div class="story-inner">ALL</div></div>
+        <span class="story-name">Tous</span>
+        <span class="story-status">${cachedRuns.length} runs</span>
+      </div>`;
+    bar.innerHTML = allChip + assets.map((a) => {
+      const healthy = a.sla_status === "HEALTHY";
+      const initials = String(a.domain || "DP").slice(0, 3);
+      return `
+        <div class="story-item" onclick="window.filterByDomainStory('${a.domain}')">
+          <div class="story-ring ${healthy ? "ok" : "warn"}">
+            <div class="story-inner">${initials}</div>
+          </div>
+          <span class="story-name">${a.domain}</span>
+          <span class="story-status">${healthy ? "SLA OK" : "SLA Alerte"}</span>
+        </div>
+      `;
+    }).join("");
+  }
+
+  window.filterByDomainStory = (domain) => {
+    $("filter-domain-select").value = domain;
+    renderRunsTable();
+    showToast(domain ? `Filtre appliqué : domaine « ${domain} »` : "Affichage de tous les domaines");
+  };
+
   function populateDomainSelects(domains) {
     const names = domains.map((d) => (typeof d === "string" ? d : d.domain || d.name)).filter(Boolean);
-    const autoIds = ["demo-dataset-domain", "upload-domain-select", "sql-domain-select", "watch-domain-select"];
-    autoIds.forEach((id) => {
+    ["demo-dataset-domain", "upload-domain-select", "sql-domain-select", "watch-domain-select"].forEach((id) => {
       const sel = $(id);
       if (!sel) return;
       const cur = sel.value;
@@ -134,8 +182,7 @@
       if ([...sel.options].some((o) => o.value === cur)) sel.value = cur;
     });
 
-    const filterIds = ["filter-domain-select", "quar-domain-filter"];
-    filterIds.forEach((id) => {
+    ["filter-domain-select", "quar-domain-filter"].forEach((id) => {
       const sel = $(id);
       if (!sel) return;
       const cur = sel.value;
@@ -186,7 +233,7 @@
         <td><span class="tag tag-ok">${r.status}</span></td>
         <td>
           <button class="btn btn-secondary btn-sm" onclick="window.openRunModal('${r.run_id}')">
-            Inspecter & Télécharger
+            Inspecter &amp; Télécharger
           </button>
         </td>
       </tr>
@@ -211,7 +258,7 @@
       $("modal-run-title").textContent = `Exécution ${runId.slice(0, 8)} — Domaine « ${meta.domain} »`;
       $("modal-run-sub").textContent = `Source : ${meta.source_file} | Lignes : ${meta.row_count} | SHA-256 : ${(meta.file_hash_sha256 || "").slice(0, 16)}...`;
 
-      let html = `<h3>Incidents & Règles Déclenchées (${findings.length})</h3>`;
+      let html = `<h3>Incidents &amp; Règles Déclenchées (${findings.length})</h3>`;
       if (!findings.length) {
         html += `<p class="feedback ok">✅ Aucun incident détecté : 100 % des lignes respectent le contrat de qualité.</p>`;
       } else {
@@ -238,6 +285,7 @@
       const resp = await fetch(`/api/runs/${activeModalRunId}/artifacts/${kind}`, { headers: headers() });
       if (!resp.ok) {
         const txt = await resp.text();
+        showToast("⚠️ Artefact non généré pour ce run");
         alert("Artefact indisponible : " + txt);
         return;
       }
@@ -251,6 +299,7 @@
         a.download = filename;
         a.click();
       }
+      showToast(`✅ Téléchargement prêt : ${filename}`);
     } catch (err) {
       alert(err.message);
     }
@@ -376,55 +425,81 @@
     }
   });
 
-  // ==================== ONGLET 3 : QUARANTAINE ====================
+  // ==================== ONGLET 3 : QUARANTAINE (CARTES TACTILES) ====================
   async function loadQuarantine() {
     try {
       const dom = $("quar-domain-filter").value;
       const st = $("quar-status-filter").value;
-      const qs = new URLSearchParams({ status: st, limit: "50" });
+      const qs = new URLSearchParams({ status: st, limit: "60" });
       if (dom) qs.set("domain", dom);
       const data = await api(`/api/quarantine?${qs.toString()}`);
       const items = data.items || [];
-      const tbody = $("quarantine-tbody");
+      const grid = $("quarantine-cards-grid");
       if (!items.length) {
-        tbody.innerHTML = `<tr><td colspan="7" class="empty-cell">Aucune ligne en quarantaine pour ce filtre.</td></tr>`;
+        grid.innerHTML = `<div class="empty-cell">Aucune ligne en quarantaine pour ce filtre (${st}).</div>`;
         return;
       }
-      tbody.innerHTML = items.map((it) => {
-        const payload = typeof it.row_data === "string" ? it.row_data : JSON.stringify(it.row_data || it.payload || it);
+      grid.innerHTML = items.map((it) => {
+        const qid = it.quarantine_id ?? it.id;
+        let rowObj = {};
+        try {
+          rowObj = typeof it.row_payload_json === "string" ? JSON.parse(it.row_payload_json) : (it.row_payload_json || {});
+        } catch { rowObj = { brut: String(it.row_payload_json || "") }; }
+
+        let issuesArr = [];
+        try {
+          issuesArr = typeof it.issues_json === "string" ? JSON.parse(it.issues_json) : (it.issues_json || []);
+        } catch { issuesArr = [String(it.issues_json || "Violation contrat")]; }
+
+        const issueText = Array.isArray(issuesArr)
+          ? issuesArr.map((x) => (typeof x === "string" ? x : (x.message || x.rule_id || JSON.stringify(x)))).join(" • ")
+          : String(issuesArr);
+
+        const chips = Object.entries(rowObj).map(([k, v]) =>
+          `<span class="field-chip"><strong>${k}:</strong> ${v === null || v === "" ? "<em>NULL</em>" : v}</span>`
+        ).join("");
+
         return `
-          <tr>
-            <td>${it.id}</td>
-            <td><code>${String(it.run_id || "").slice(0, 8)}</code></td>
-            <td><span class="tag tag-info">${it.domain}</span></td>
-            <td>${it.reason || it.reasons || "Violation contrat"}</td>
-            <td><code style="font-size:11px">${payload.slice(0, 90)}</code></td>
-            <td><span class="tag tag-warn">${it.status}</span></td>
-            <td>
-              <button class="btn btn-secondary btn-sm" onclick="window.resolveQuarantine(${it.id}, 'APPROVED')">Valider</button>
-              <button class="btn btn-danger btn-sm" onclick="window.resolveQuarantine(${it.id}, 'REJECTED')">Rejeter</button>
-            </td>
-          </tr>
+          <div class="quar-card">
+            <div class="quar-card-head">
+              <div>
+                <strong>Ligne #${qid}</strong> · <span class="tag tag-info">${it.domain}</span>
+                <small class="muted"> (Run ${String(it.run_id || "").slice(0, 8)})</small>
+              </div>
+              <span class="tag tag-warn">${it.status}</span>
+            </div>
+            <div class="quar-issues">⚠️ ${issueText || "Violation de règle métier"}</div>
+            <div class="quar-fields">${chips}</div>
+            <div class="quar-actions">
+              <button class="btn btn-success btn-sm" onclick="window.resolveQuarantine(${qid}, 'APPROVED')">✓ Approuver</button>
+              <button class="btn btn-danger btn-sm" onclick="window.resolveQuarantine(${qid}, 'REJECTED')">✕ Rejeter</button>
+            </div>
+          </div>
         `;
       }).join("");
     } catch {}
   }
 
-  window.resolveQuarantine = async (id, status) => {
+  window.resolveQuarantine = async (qid, status) => {
     try {
       await api("/api/quarantine/resolve", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id, status }),
+        body: JSON.stringify({ quarantine_id: qid, status }),
       });
-      setFeedback("quarantine-feedback", `Ligne #${id} marquée ${status}.`);
+      setFeedback("quarantine-feedback", `Ligne #${qid} marquée ${status}.`);
+      showToast(`Ligne #${qid} -> ${status}`);
       await loadQuarantine();
+      const quarData = await api("/api/quarantine?status=PENDING&limit=200");
+      $("kpi-quarantine").textContent = (quarData.items || []).length;
     } catch (err) {
       setFeedback("quarantine-feedback", err.message, true);
     }
   };
 
   $("btn-load-quarantine").addEventListener("click", loadQuarantine);
+  $("quar-domain-filter").addEventListener("change", loadQuarantine);
+  $("quar-status-filter").addEventListener("change", loadQuarantine);
 
   // ==================== ONGLET 4 : DATA CATALOG & GLOSSAIRE ====================
   async function loadCatalogAssets() {
@@ -662,6 +737,5 @@
 
   $("btn-load-audit").addEventListener("click", loadKeysAndAudit);
 
-  // Démarrage initial automatique
   refreshAll();
 })();
