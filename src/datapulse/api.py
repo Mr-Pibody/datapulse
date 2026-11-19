@@ -1,4 +1,4 @@
-"""API REST FastAPI, RBAC Zero-Trust et observabilité DataPulse V14."""
+"""API REST FastAPI, RBAC Zero-Trust, RGPD/PII et observabilité DataPulse V15."""
 
 from __future__ import annotations
 
@@ -19,7 +19,9 @@ from datapulse.config_loader import ConfigError
 from datapulse.dashboard import render_dashboard_html
 from datapulse.drift import detect_data_drift, load_run_column_profiles
 from datapulse.exceptions import DataPulseError, StorageTransactionError
+from datapulse.ingestion import ingest_file
 from datapulse.lineage import build_audit_certificate, get_run_lineage, verify_audit_certificate
+from datapulse.pii import mask_file_pii, scan_dataframe_pii
 from datapulse.prometheus_metrics import (
     check_liveness,
     check_readiness,
@@ -92,8 +94,8 @@ def create_app(
     """Construit l'instance FastAPI configurée avec contrôle d'accès RBAC."""
     app = FastAPI(
         title="DataPulse API",
-        version="14.0.0",
-        description="API REST Zero-Trust de gouvernance, Data Lineage, RBAC et Prometheus.",
+        version="15.0.0",
+        description="API REST Zero-Trust de gouvernance, RGPD/PII, Data Lineage et Prometheus.",
     )
 
     def _storage() -> DataPulseStorage:
@@ -192,7 +194,7 @@ def create_app(
         storage = _storage()
         return {
             "status": "ok",
-            "version": "14.0.0",
+            "version": "15.0.0",
             "db_path": str(storage.db_path),
             "auth_enforced": (
                 auth_enabled if auth_enabled is not None else has_active_api_keys(db_path)
@@ -215,6 +217,41 @@ def create_app(
             content=body,
             media_type="text/plain; version=0.0.4; charset=utf-8",
         )
+
+    @app.post("/api/pii/scan", dependencies=[Depends(_require_role("viewer"))])
+    async def scan_pii_endpoint(file: UploadFile = File(...)) -> dict[str, Any]:  # noqa: B008
+        filename = file.filename or "scan.csv"
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir) / filename
+            with open(tmp_path, "wb") as out_f:
+                shutil.copyfileobj(file.file, out_f)
+            try:
+                ingestion = ingest_file(str(tmp_path))
+                return scan_dataframe_pii(ingestion.dataframe)
+            except (DataPulseError, ValueError) as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/pii/mask", dependencies=[Depends(_require_role("operator"))])
+    async def mask_pii_endpoint(
+        file: UploadFile = File(...),  # noqa: B008
+        strategy: str = Form(default="partial"),
+        columns: str = Form(default=""),
+    ) -> dict[str, Any]:
+        filename = file.filename or "mask.csv"
+        col_list = [c.strip() for c in columns.split(",") if c.strip()] if columns else None
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir) / filename
+            with open(tmp_path, "wb") as out_f:
+                shutil.copyfileobj(file.file, out_f)
+            try:
+                return mask_file_pii(
+                    str(tmp_path),
+                    strategy=strategy,
+                    columns=col_list,
+                    processed_dir=processed_dir,
+                )
+            except (DataPulseError, ValueError) as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/api/security/keys", dependencies=[Depends(_require_role("admin"))])
     def get_security_keys() -> dict[str, Any]:

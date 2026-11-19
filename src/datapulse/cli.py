@@ -1,4 +1,4 @@
-"""Interface en ligne de commande DataPulse V14."""
+"""Interface en ligne de commande DataPulse V15."""
 
 from __future__ import annotations
 
@@ -32,6 +32,7 @@ from datapulse.lineage import (
 )
 from datapulse.models import RunMeta
 from datapulse.observability import PipelineTracker, get_structured_logger
+from datapulse.pii import mask_file_pii, scan_dataframe_pii
 from datapulse.profiler import StreamingProfiler, detect_schema_drift, profile_dataframe
 from datapulse.prometheus_metrics import collect_observability_snapshot, render_prometheus_metrics
 from datapulse.quarantine import (
@@ -150,7 +151,7 @@ def _finalize_and_report(
         domain=resolved_domain,
         source_file=source_label,
         file_hash_sha256=file_hash,
-        config_version=str(config.get("version", "14.0")),
+        config_version=str(config.get("version", "15.0")),
         row_count=row_count,
         duration_ms=telemetry.total_duration_ms,
         peak_memory_kb=peak_memory_kb,
@@ -199,7 +200,7 @@ def _finalize_and_report(
         config=config,
     )
 
-    print(f"\n=== DataPulse V14 | Run {run_id[:8]} ({resolved_domain} | {mode_label}) ===")
+    print(f"\n=== DataPulse V15 | Run {run_id[:8]} ({resolved_domain} | {mode_label}) ===")
     print(f"Source      : {source_label} ({row_count} lignes)")
     print(
         f"Score Qual. : {quality_info['score']}/100 (Grade {quality_info['grade']}) | "
@@ -471,6 +472,45 @@ def run_sql_pipeline(
     finally:
         if tracemalloc.is_tracing():
             tracemalloc.stop()
+
+
+def pii_scan_cmd(file_path: str) -> int:
+    ingestion = ingest_file(file_path)
+    report = scan_dataframe_pii(ingestion.dataframe)
+    print(f"\n=== Scan RGPD / Données Personnelles (PII) : {file_path} ===")
+    print(
+        f"Lignes analysées : {report['row_count']} | "
+        f"Colonnes PII : {report['pii_columns_count']} | "
+        f"Cellules sensibles : {report['total_pii_cells']}"
+    )
+    for col in report["columns"]:
+        print(
+            f"  - {col['column']:<20} | type={col['pii_type']:<11} | "
+            f"{col['match_rate_pct']:>5.1f}% | aperçu={col['sample_masked']}"
+        )
+    print()
+    return int(ExitCode.SUCCESS)
+
+
+def pii_mask_cmd(
+    *,
+    file_path: str,
+    strategy: str = "partial",
+    columns: str | None = None,
+    output_path: str | None = None,
+) -> int:
+    col_list = [c.strip() for c in columns.split(",") if c.strip()] if columns else None
+    summary = mask_file_pii(
+        file_path,
+        output_path=output_path,
+        strategy=strategy,
+        columns=col_list,
+    )
+    print(f"\n=== Anonymisation RGPD DataPulse V15 (stratégie={summary['strategy']}) ===")
+    print(f"Colonnes masquées : {', '.join(summary['masked_columns']) or 'aucune'}")
+    print(f"Cellules traitées : {summary['masked_cells_total']}")
+    print(f"Export RGPD       : {summary['output_path']}\n")
+    return int(ExitCode.SUCCESS)
 
 
 def init_config_cmd(
@@ -797,7 +837,7 @@ def alerts_test_cmd(
         print("Aucun canal configuré (--webhook-url, --slack-url, --discord-url ou env).")
         return int(ExitCode.EXECUTION_ERROR)
 
-    print("\n=== Test des notifications DataPulse V14 ===")
+    print("\n=== Test des notifications DataPulse V15 ===")
     has_failure = False
     for r in results:
         print(f"  - {r['channel']:<10} : {r['status']} ({r['detail']})")
@@ -841,7 +881,7 @@ def watch_cmd(
     db_path: str = "db/datapulse.sqlite",
 ) -> int:
     target = config_path or watch_dir or ""
-    print(f"\n=== Orchestrateur DataPulse V14 démarré ({target}) ===")
+    print(f"\n=== Orchestrateur DataPulse V15 démarré ({target}) ===")
     summary = watch_loop(
         watch_dir=watch_dir,
         config_path=config_path,
@@ -863,7 +903,7 @@ def watch_cmd(
 
 def show_watch_status(db_path: str = "db/datapulse.sqlite", limit: int = 20) -> int:
     status = get_watcher_status(db_path=db_path, limit=limit)
-    print("\n=== État de l'Orchestrateur DataPulse V14 ===")
+    print("\n=== État de l'Orchestrateur DataPulse V15 ===")
     print(f"Fichiers suivis : {status['files_count']} | Tâches planifiées : {status['jobs_count']}")
     for f in status["recent_files"]:
         print(
@@ -903,7 +943,7 @@ def serve_api(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="datapulse",
-        description="DataPulse V14 — Observatoire Zero-Trust de qualité, lineage et télémétrie",
+        description="DataPulse V15 — Observatoire Zero-Trust de qualité, RGPD/PII et lineage",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -925,6 +965,20 @@ def build_parser() -> argparse.ArgumentParser:
     p_sql.add_argument("--json-logs", action="store_true", help="Logs structurés JSON")
     p_sql.add_argument("--chunk-size", type=int, default=None, help="Streaming SQL par blocs")
     p_sql.add_argument("--quarantine", action="store_true", help="Isole les lignes rejetées")
+
+    p_pscan = sub.add_parser("pii-scan", help="Détecte les données personnelles (PII/RGPD)")
+    p_pscan.add_argument("--file", required=True, help="Fichier à analyser")
+
+    p_pmask = sub.add_parser("mask", help="Anonymise les données personnelles d'un fichier")
+    p_pmask.add_argument("--file", required=True, help="Fichier source")
+    p_pmask.add_argument(
+        "--strategy",
+        default="partial",
+        choices=["partial", "redact", "hash"],
+        help="Stratégie d'anonymisation",
+    )
+    p_pmask.add_argument("--columns", required=False, help="Colonnes cibles séparées par virgule")
+    p_pmask.add_argument("--output", required=False, help="Chemin CSV de sortie")
 
     p_init = sub.add_parser("init-config", help="Infère et génère un contrat YAML")
     p_init.add_argument("--file", required=True, help="Fichier échantillon")
@@ -1044,6 +1098,15 @@ def main(argv: list[str] | None = None) -> int:
                 json_logs=args.json_logs,
                 chunk_size=args.chunk_size,
                 quarantine=args.quarantine,
+            )
+        if args.command == "pii-scan":
+            return pii_scan_cmd(file_path=args.file)
+        if args.command == "mask":
+            return pii_mask_cmd(
+                file_path=args.file,
+                strategy=args.strategy,
+                columns=args.columns,
+                output_path=args.output,
             )
         if args.command == "init-config":
             return init_config_cmd(

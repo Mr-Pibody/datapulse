@@ -51,7 +51,7 @@ def test_api_metrics_and_health_probes(tmp_path: Path) -> None:
     live = client.get("/health/live")
     assert live.status_code == 200
     assert live.json()["status"] == "alive"
-    assert live.json()["version"] == "14.0.0"
+    assert live.json()["version"] == "15.0.0"
 
     ready = client.get("/health/ready")
     assert ready.status_code == 200
@@ -93,6 +93,6 @@ def test_readiness_probe_returns_503_when_db_unwritable(tmp_path: Path) -> None:
 def test_prometheus_empty_db_renders_zero_gauges(tmp_path: Path) -> None:
     missing_db = tmp_path / "nonexistent.sqlite"
     text = render_prometheus_metrics(missing_db)
-    assert 'datapulse_info{version="14.0.0"} 1' in text
+    assert 'datapulse_info{version="15.0.0"} 1' in text
     assert "datapulse_watcher_tracked_files_total 0" in text
     assert "datapulse_scheduler_jobs_total 0" in text
