@@ -493,7 +493,8 @@ def render_dashboard_html() -> str:
     let cachedRuns = [];
 
     function authHeaders(extra = {}) {
-      const key = localStorage.getItem('datapulse_api_key') || '';
+      const key = localStorage.getItem('datapulse_api_key') ||
+            localStorage.getItem('datapulse_api_key') || '';
       return key ? { ...extra, 'X-API-Key': key } : { ...extra };
     }
 
@@ -507,7 +508,8 @@ def render_dashboard_html() -> str:
     });
 
     const keyInput = document.getElementById('api-key-input');
-    keyInput.value = localStorage.getItem('datapulse_api_key') || '';
+    keyInput.value = localStorage.getItem('datapulse_api_key') ||
+            localStorage.getItem('datapulse_api_key') || '';
     document.getElementById('save-key-btn').addEventListener('click', async () => {
       const val = keyInput.value.trim();
       if (val) localStorage.setItem('datapulse_api_key', val);
@@ -991,10 +993,12 @@ def render_dashboard_html() -> str:
           const typed = inp ? inp.value.trim() : '';
           if (typed) {
             localStorage.setItem('datapulse_api_key', typed);
+            localStorage.setItem('datapulse_api_key', typed);
             localStorage.setItem('apiKey', typed);
             return typed;
           }
           return (
+            localStorage.getItem('datapulse_api_key') ||
             localStorage.getItem('datapulse_api_key') ||
             localStorage.getItem('apiKey') ||
             ''
