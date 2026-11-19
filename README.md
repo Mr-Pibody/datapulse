@@ -1,4 +1,4 @@
-# DataPulse v14.0.0
+# DataPulse v18.2.0
 
 **DataPulse** est un moteur d'observabilité, de gouvernance et de contrôle qualité des données orienté contrats (*Data Contracts*), conçu pour auditer des flux **fichiers** (CSV, Excel, JSON, JSONL, Parquet) et **bases de données SQL** en mode batch ou streaming à mémoire constante.
 
@@ -65,3 +65,10 @@ ruff check src tests
 mypy src
 pytest --cov=datapulse --cov-report=term-missing
 ```
+
+
+## Nouveautes v15.0 - v18.2 (Enterprise & Zero-Terminal)
+- **RGPD / PII (v15)** : Detection et anonymisation automatique (partial, hash, redact).
+- **Chaos Lab (v16)** : Generateur synthetique et injection controlee d anomalies.
+- **Enterprise Data Catalog & SLA (v17)** : Cartographie YAML, extraction PII et glossaire metier.
+- **Observatoire Web Zero-Terminal & Durcissement Jury (v18.0 - v18.2)** : Interface 7 onglets, Stories Sante, Replay de Quarantaine, signatures HMAC-SHA256, PSI lisse de Laplace et distance de Wasserstein-1 (95/95 tests).
