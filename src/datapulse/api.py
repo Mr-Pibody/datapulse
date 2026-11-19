@@ -1,13 +1,15 @@
-"""API REST FastAPI et endpoints d'observabilité DataPulse V12."""
+"""API REST FastAPI, RBAC Zero-Trust et observabilité DataPulse V13."""
 
 from __future__ import annotations
 
+import os
 import shutil
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from pydantic import BaseModel
 
@@ -24,6 +26,18 @@ from datapulse.prometheus_metrics import (
     render_prometheus_metrics,
 )
 from datapulse.schema_inference import list_available_domains
+from datapulse.security import (
+    authenticate_api_key,
+    bootstrap_env_api_key,
+    create_api_key,
+    extract_bearer_or_api_key,
+    has_active_api_keys,
+    list_api_keys,
+    list_security_audit,
+    record_security_audit,
+    revoke_api_key,
+    role_satisfies,
+)
 from datapulse.sql_connector import list_sql_tables
 from datapulse.storage import DataPulseStorage
 from datapulse.watcher import get_watcher_status, scan_directory_once
@@ -60,21 +74,114 @@ class WatcherScanRequest(BaseModel):
     strict: bool = False
 
 
+class ApiKeyCreateRequest(BaseModel):
+    """Charge utile JSON pour créer une nouvelle clé API RBAC."""
+
+    name: str
+    role: str = "viewer"
+
+
 def create_app(
     db_path: str = "db/datapulse.sqlite",
     reports_dir: str = "reports",
     processed_dir: str = "data/processed",
     configs_dir: str = "configs",
+    *,
+    auth_enabled: bool | None = None,
 ) -> FastAPI:
-    """Construit l'instance FastAPI configurée pour une base SQLite donnée."""
+    """Construit l'instance FastAPI configurée avec contrôle d'accès RBAC."""
     app = FastAPI(
         title="DataPulse API",
-        version="12.0.0",
-        description="API REST de gouvernance, Data Lineage, Prometheus et observabilité.",
+        version="13.0.0",
+        description="API REST Zero-Trust de gouvernance, Data Lineage, RBAC et Prometheus.",
     )
 
     def _storage() -> DataPulseStorage:
         return DataPulseStorage(db_path=db_path)
+
+    def _require_role(min_role: str) -> Callable[[Request], dict[str, Any]]:
+        def _dependency(request: Request) -> dict[str, Any]:
+            bootstrap_env_api_key(db_path)
+            env_required = os.environ.get("DATAPULSE_AUTH_REQUIRED", "").strip().lower() in {
+                "1",
+                "true",
+                "yes",
+            }
+            enforced = (
+                auth_enabled
+                if auth_enabled is not None
+                else (env_required or has_active_api_keys(db_path))
+            )
+            resource = f"{request.method} {request.url.path}"
+            raw_key = extract_bearer_or_api_key(
+                x_api_key=request.headers.get("x-api-key"),
+                authorization=request.headers.get("authorization"),
+            )
+
+            if not enforced and not raw_key:
+                return {"key_id": "open-mode", "name": "local-open", "role": "admin"}
+
+            if not raw_key:
+                record_security_audit(
+                    db_path,
+                    actor_key_id="anonymous",
+                    actor_name="anonymous",
+                    actor_role="none",
+                    action="AUTH_MISSING",
+                    resource=resource,
+                    outcome="DENIED",
+                    detail="En-tête X-API-Key ou Authorization Bearer manquant",
+                )
+                raise HTTPException(
+                    status_code=401,
+                    detail="Authentification requise (en-tête X-API-Key ou Authorization: Bearer).",
+                )
+
+            principal = authenticate_api_key(db_path, raw_key)
+            if principal is None:
+                record_security_audit(
+                    db_path,
+                    actor_key_id="invalid",
+                    actor_name="invalid",
+                    actor_role="none",
+                    action="AUTH_INVALID",
+                    resource=resource,
+                    outcome="DENIED",
+                    detail="Clé API invalide ou révoquée",
+                )
+                raise HTTPException(status_code=401, detail="Clé API invalide ou révoquée.")
+
+            if not role_satisfies(str(principal["role"]), min_role):
+                record_security_audit(
+                    db_path,
+                    actor_key_id=str(principal["key_id"]),
+                    actor_name=str(principal["name"]),
+                    actor_role=str(principal["role"]),
+                    action="RBAC_FORBIDDEN",
+                    resource=resource,
+                    outcome="DENIED",
+                    detail=f"Rôle '{principal['role']}' insuffisant (requis: '{min_role}')",
+                )
+                raise HTTPException(
+                    status_code=403,
+                    detail=(
+                        f"Accès refusé : rôle '{min_role}' requis (actuel : '{principal['role']}')."
+                    ),
+                )
+
+            record_security_audit(
+                db_path,
+                actor_key_id=str(principal["key_id"]),
+                actor_name=str(principal["name"]),
+                actor_role=str(principal["role"]),
+                action="API_ACCESS",
+                resource=resource,
+                outcome="ALLOWED",
+                detail=f"Accès autorisé ({min_role})",
+            )
+            return principal
+
+        return _dependency
 
     @app.get("/", response_class=HTMLResponse)
     def dashboard_home() -> HTMLResponse:
@@ -85,8 +192,11 @@ def create_app(
         storage = _storage()
         return {
             "status": "ok",
-            "version": "12.0.0",
+            "version": "13.0.0",
             "db_path": str(storage.db_path),
+            "auth_enforced": (
+                auth_enabled if auth_enabled is not None else has_active_api_keys(db_path)
+            ),
         }
 
     @app.get("/health/live")
@@ -106,7 +216,33 @@ def create_app(
             media_type="text/plain; version=0.0.4; charset=utf-8",
         )
 
-    @app.get("/api/domains")
+    @app.get("/api/security/keys", dependencies=[Depends(_require_role("admin"))])
+    def get_security_keys() -> dict[str, Any]:
+        items = list_api_keys(db_path)
+        return {"count": len(items), "keys": items}
+
+    @app.post("/api/security/keys", dependencies=[Depends(_require_role("admin"))])
+    def create_security_key_endpoint(payload: ApiKeyCreateRequest) -> dict[str, Any]:
+        try:
+            return create_api_key(db_path, name=payload.name, role=payload.role)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.delete("/api/security/keys/{key_id}", dependencies=[Depends(_require_role("admin"))])
+    def revoke_security_key_endpoint(key_id: str) -> dict[str, Any]:
+        try:
+            return revoke_api_key(db_path, key_id=key_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/api/security/audit", dependencies=[Depends(_require_role("admin"))])
+    def get_security_audit_endpoint(
+        limit: int = Query(default=50, ge=1, le=500),
+    ) -> dict[str, Any]:
+        events = list_security_audit(db_path, limit=limit)
+        return {"count": len(events), "events": events}
+
+    @app.get("/api/domains", dependencies=[Depends(_require_role("viewer"))])
     def get_domains() -> dict[str, Any]:
         configured = list_available_domains(configs_dir=configs_dir)
         items = [
@@ -118,7 +254,7 @@ def create_app(
         ]
         return {"count": len(items), "domains": items}
 
-    @app.get("/api/sql/tables")
+    @app.get("/api/sql/tables", dependencies=[Depends(_require_role("viewer"))])
     def inspect_sql_tables(uri: str = Query(..., min_length=3)) -> dict[str, Any]:
         try:
             tables = list_sql_tables(uri)
@@ -126,7 +262,7 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"count": len(tables), "tables": tables}
 
-    @app.get("/api/runs")
+    @app.get("/api/runs", dependencies=[Depends(_require_role("viewer"))])
     def list_runs(
         domain: str | None = Query(default=None),
         limit: int = Query(default=20, ge=1, le=200),
@@ -134,32 +270,32 @@ def create_app(
         runs = _storage().get_history(domain=domain, limit=limit)
         return {"count": len(runs), "runs": runs}
 
-    @app.get("/api/runs/{run_id}")
+    @app.get("/api/runs/{run_id}", dependencies=[Depends(_require_role("viewer"))])
     def get_run(run_id: str) -> dict[str, Any]:
         details = _storage().get_run_details(run_id)
         if details is None:
             raise HTTPException(status_code=404, detail=f"Run introuvable : {run_id}")
         return details
 
-    @app.get("/api/runs/{run_id}/lineage")
+    @app.get("/api/runs/{run_id}/lineage", dependencies=[Depends(_require_role("viewer"))])
     def get_run_lineage_endpoint(run_id: str) -> dict[str, Any]:
         lineage = get_run_lineage(db_path, run_id)
         if lineage is None:
             raise HTTPException(status_code=404, detail=f"Lineage introuvable : {run_id}")
         return lineage
 
-    @app.get("/api/runs/{run_id}/certificate")
+    @app.get("/api/runs/{run_id}/certificate", dependencies=[Depends(_require_role("viewer"))])
     def get_run_certificate_endpoint(run_id: str) -> dict[str, Any]:
         cert = build_audit_certificate(db_path, run_id)
         if cert is None:
             raise HTTPException(status_code=404, detail=f"Certificat introuvable : {run_id}")
         return cert
 
-    @app.post("/api/certificates/verify")
+    @app.post("/api/certificates/verify", dependencies=[Depends(_require_role("viewer"))])
     def verify_certificate_endpoint(certificate: dict[str, Any]) -> dict[str, Any]:
         return verify_audit_certificate(certificate)
 
-    @app.get("/api/diff")
+    @app.get("/api/diff", dependencies=[Depends(_require_role("viewer"))])
     def compare_runs_endpoint(
         run_a: str | None = Query(default=None),
         run_b: str | None = Query(default=None),
@@ -194,7 +330,7 @@ def create_app(
         comparison["data_drifts"] = detect_data_drift(cols_b, cols_a)
         return comparison
 
-    @app.get("/api/quarantine")
+    @app.get("/api/quarantine", dependencies=[Depends(_require_role("viewer"))])
     def get_quarantine(
         domain: str | None = Query(default=None),
         status: str = Query(default="PENDING"),
@@ -203,7 +339,7 @@ def create_app(
         items = _storage().list_quarantine(domain=domain, status=status, limit=limit)
         return {"count": len(items), "items": items}
 
-    @app.get("/api/alerts")
+    @app.get("/api/alerts", dependencies=[Depends(_require_role("viewer"))])
     def get_alerts(
         domain: str | None = Query(default=None),
         limit: int = Query(default=30, ge=1, le=200),
@@ -211,7 +347,7 @@ def create_app(
         items = list_alert_history(db_path=db_path, domain=domain, limit=limit)
         return {"count": len(items), "alerts": items}
 
-    @app.post("/api/alerts/test")
+    @app.post("/api/alerts/test", dependencies=[Depends(_require_role("operator"))])
     def test_alerts_endpoint(payload: AlertTestRequest) -> dict[str, Any]:
         results = send_test_alert(
             db_path=db_path,
@@ -228,11 +364,11 @@ def create_app(
             )
         return {"count": len(results), "results": results}
 
-    @app.get("/api/watcher/status")
+    @app.get("/api/watcher/status", dependencies=[Depends(_require_role("viewer"))])
     def watcher_status_endpoint(limit: int = Query(default=30, ge=1, le=200)) -> dict[str, Any]:
         return get_watcher_status(db_path=db_path, limit=limit)
 
-    @app.post("/api/watcher/scan")
+    @app.post("/api/watcher/scan", dependencies=[Depends(_require_role("operator"))])
     def watcher_scan_endpoint(payload: WatcherScanRequest) -> dict[str, Any]:
         try:
             events = scan_directory_once(
@@ -250,7 +386,7 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"processed_count": len(events), "events": events}
 
-    @app.post("/api/runs/upload")
+    @app.post("/api/runs/upload", dependencies=[Depends(_require_role("operator"))])
     async def upload_and_run(
         file: UploadFile = File(...),  # noqa: B008
         domain: str = Form(default="auto"),
@@ -284,7 +420,7 @@ def create_app(
             "run": latest[0] if latest else None,
         }
 
-    @app.post("/api/runs/sql")
+    @app.post("/api/runs/sql", dependencies=[Depends(_require_role("operator"))])
     def run_sql_endpoint(payload: SqlRunRequest) -> dict[str, Any]:
         try:
             exit_code = run_sql_pipeline(

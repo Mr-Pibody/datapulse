@@ -1,4 +1,4 @@
-"""Interface en ligne de commande DataPulse V12."""
+"""Interface en ligne de commande DataPulse V13."""
 
 from __future__ import annotations
 
@@ -42,6 +42,12 @@ from datapulse.quarantine import (
 from datapulse.reconciler import reconcile_findings
 from datapulse.reporter import generate_reports
 from datapulse.schema_inference import generate_domain_yaml, resolve_domain
+from datapulse.security import (
+    create_api_key,
+    list_api_keys,
+    list_security_audit,
+    revoke_api_key,
+)
 from datapulse.sql_connector import (
     build_select_sql,
     compute_sql_fingerprint,
@@ -144,7 +150,7 @@ def _finalize_and_report(
         domain=resolved_domain,
         source_file=source_label,
         file_hash_sha256=file_hash,
-        config_version=str(config.get("version", "12.0")),
+        config_version=str(config.get("version", "13.0")),
         row_count=row_count,
         duration_ms=telemetry.total_duration_ms,
         peak_memory_kb=peak_memory_kb,
@@ -193,7 +199,7 @@ def _finalize_and_report(
         config=config,
     )
 
-    print(f"\n=== DataPulse V12 | Run {run_id[:8]} ({resolved_domain} | {mode_label}) ===")
+    print(f"\n=== DataPulse V13 | Run {run_id[:8]} ({resolved_domain} | {mode_label}) ===")
     print(f"Source      : {source_label} ({row_count} lignes)")
     print(
         f"Score Qual. : {quality_info['score']}/100 (Grade {quality_info['grade']}) | "
@@ -612,6 +618,62 @@ def metrics_cmd(
     return int(ExitCode.SUCCESS)
 
 
+def key_create_cmd(
+    *,
+    name: str,
+    role: str = "viewer",
+    db_path: str = "db/datapulse.sqlite",
+) -> int:
+    created = create_api_key(db_path=db_path, name=name, role=role)
+    print("\n=== Nouvelle Clé API DataPulse Zero-Trust ===")
+    print(f"Key ID         : {created['key_id']}")
+    print(f"Nom            : {created['name']}")
+    print(f"Rôle RBAC      : {created['role']}")
+    print(f"Clé secrète    : {created['api_key']}")
+    print("IMPORTANT      : Conservez cette clé maintenant ; seul son hash SHA-256 est stocké.\n")
+    return int(ExitCode.SUCCESS)
+
+
+def key_list_cmd(db_path: str = "db/datapulse.sqlite") -> int:
+    keys = list_api_keys(db_path)
+    if not keys:
+        print("Aucune clé API configurée (mode ouvert local).")
+        return int(ExitCode.SUCCESS)
+
+    print("\n=== Clés API DataPulse enregistrées ===")
+    for k in keys:
+        status = "ACTIVE" if k["is_active"] else "REVOKED"
+        print(
+            f"  [{k['key_id']}] {k['name']:<22} | role={k['role']:<8} | "
+            f"prefix={k['key_prefix']}... | {status}"
+        )
+    print()
+    return int(ExitCode.SUCCESS)
+
+
+def key_revoke_cmd(key_id: str, db_path: str = "db/datapulse.sqlite") -> int:
+    revoked = revoke_api_key(db_path, key_id=key_id)
+    print(f"\n=== Clé API révoquée : {revoked['key_id']} ({revoked['name']}) ===\n")
+    return int(ExitCode.SUCCESS)
+
+
+def audit_log_cmd(limit: int = 30, db_path: str = "db/datapulse.sqlite") -> int:
+    events = list_security_audit(db_path, limit=limit)
+    if not events:
+        print("Aucun événement enregistré dans le journal d'audit de sécurité.")
+        return int(ExitCode.SUCCESS)
+
+    print("\n=== Journal d'Audit de Sécurité DataPulse ===")
+    for ev in events:
+        print(
+            f"[{str(ev['timestamp'])[:19]}] {ev['outcome']:<7} | "
+            f"{ev['action']:<14} | actor={ev['actor_name']} ({ev['actor_role']}) | "
+            f"{ev['resource']}"
+        )
+    print()
+    return int(ExitCode.SUCCESS)
+
+
 def diff_runs(
     run_a: str | None = None,
     run_b: str | None = None,
@@ -735,7 +797,7 @@ def alerts_test_cmd(
         print("Aucun canal configuré (--webhook-url, --slack-url, --discord-url ou env).")
         return int(ExitCode.EXECUTION_ERROR)
 
-    print("\n=== Test des notifications DataPulse V12 ===")
+    print("\n=== Test des notifications DataPulse V13 ===")
     has_failure = False
     for r in results:
         print(f"  - {r['channel']:<10} : {r['status']} ({r['detail']})")
@@ -779,7 +841,7 @@ def watch_cmd(
     db_path: str = "db/datapulse.sqlite",
 ) -> int:
     target = config_path or watch_dir or ""
-    print(f"\n=== Orchestrateur DataPulse V12 démarré ({target}) ===")
+    print(f"\n=== Orchestrateur DataPulse V13 démarré ({target}) ===")
     summary = watch_loop(
         watch_dir=watch_dir,
         config_path=config_path,
@@ -801,7 +863,7 @@ def watch_cmd(
 
 def show_watch_status(db_path: str = "db/datapulse.sqlite", limit: int = 20) -> int:
     status = get_watcher_status(db_path=db_path, limit=limit)
-    print("\n=== État de l'Orchestrateur DataPulse V12 ===")
+    print("\n=== État de l'Orchestrateur DataPulse V13 ===")
     print(f"Fichiers suivis : {status['files_count']} | Tâches planifiées : {status['jobs_count']}")
     for f in status["recent_files"]:
         print(
@@ -841,7 +903,7 @@ def serve_api(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="datapulse",
-        description="DataPulse V12 — Observatoire générique de qualité, lineage et télémétrie",
+        description="DataPulse V13 — Observatoire Zero-Trust de qualité, lineage et télémétrie",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -892,6 +954,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="Format de sortie (prometheus ou json)",
     )
     p_met.add_argument("--output", required=False, help="Fichier de sortie optionnel")
+
+    p_kc = sub.add_parser("key-create", help="Génère une nouvelle clé API RBAC")
+    p_kc.add_argument("--name", required=True, help="Nom descriptif de la clé")
+    p_kc.add_argument(
+        "--role",
+        default="viewer",
+        choices=["viewer", "operator", "admin"],
+        help="Rôle RBAC attribué",
+    )
+
+    sub.add_parser("key-list", help="Liste les clés API enregistrées")
+
+    p_kr = sub.add_parser("key-revoke", help="Révoque une clé API existante")
+    p_kr.add_argument("--key-id", required=True, help="Identifiant de la clé (ex: key_a1b2c3d4)")
+
+    p_alog = sub.add_parser("audit-log", help="Affiche le journal d'audit de sécurité")
+    p_alog.add_argument("--limit", type=int, default=30, help="Nombre maximal d'événements")
 
     p_diff = sub.add_parser("diff", help="Compare deux exécutions (Schema & Data Drift)")
     p_diff.add_argument("--run-a", required=False, help="ID du run de référence (base)")
@@ -987,6 +1066,14 @@ def main(argv: list[str] | None = None) -> int:
             )
         if args.command == "metrics":
             return metrics_cmd(fmt=args.format, output_path=args.output)
+        if args.command == "key-create":
+            return key_create_cmd(name=args.name, role=args.role)
+        if args.command == "key-list":
+            return key_list_cmd()
+        if args.command == "key-revoke":
+            return key_revoke_cmd(key_id=args.key_id)
+        if args.command == "audit-log":
+            return audit_log_cmd(limit=args.limit)
         if args.command == "diff":
             return diff_runs(run_a=args.run_a, run_b=args.run_b, domain=args.domain)
         if args.command == "quarantine":

@@ -1,4 +1,4 @@
-"""Dashboard web autonome pour l'observatoire DataPulse V12."""
+"""Dashboard web autonome pour l'observatoire DataPulse V13."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ def render_dashboard_html() -> str:
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>DataPulse V12 — Observatoire Qualité, Lineage, Prometheus &amp; Gouvernance</title>
+  <title>DataPulse V13 — Observatoire Zero-Trust, Lineage, Prometheus &amp; RBAC</title>
   <style>
     :root {
       --bg: #0b1120;
@@ -37,6 +37,8 @@ def render_dashboard_html() -> str:
       display: flex;
       justify-content: space-between;
       align-items: center;
+      flex-wrap: wrap;
+      gap: 1rem;
       margin-bottom: 2rem;
       padding-bottom: 1rem;
       border-bottom: 1px solid var(--border);
@@ -78,7 +80,7 @@ def render_dashboard_html() -> str:
       gap: 0.75rem;
       align-items: center;
     }
-    input[type="file"], input[type="text"], select {
+    input[type="file"], input[type="text"], input[type="password"], select {
       background: var(--card);
       color: var(--text);
       border: 1px solid var(--border);
@@ -113,13 +115,20 @@ def render_dashboard_html() -> str:
       <div>
         <h1>DataPulse</h1>
         <p style="color: var(--muted); font-size: 0.9rem;">
-          Observatoire autonome de qualité, Data Lineage, Prometheus et gouvernance
+          Observatoire Zero-Trust de qualité, Data Lineage, Prometheus et gouvernance RBAC
         </p>
       </div>
-      <div style="display: flex; gap: 0.9rem; align-items: center;">
+      <div style="display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap;">
+        <input
+          type="password"
+          id="api-key-input"
+          placeholder="X-API-Key (optionnel si ouvert)"
+          style="width: 220px;"
+        />
+        <button type="button" id="save-key-btn">Appliquer Clé</button>
         <a href="/metrics" style="color: var(--ok); text-decoration: none;">Prometheus /metrics</a>
         <a href="/docs" style="color: var(--accent); text-decoration: none;">OpenAPI /docs</a>
-        <span class="badge">v12.0.0</span>
+        <span class="badge">v13.0.0</span>
       </div>
     </header>
 
@@ -260,8 +269,24 @@ def render_dashboard_html() -> str:
   </div>
 
   <script>
+    function authHeaders(extra = {}) {
+      const key = localStorage.getItem('datapulse_api_key') || '';
+      return key ? { ...extra, 'X-API-Key': key } : { ...extra };
+    }
+
+    const keyInput = document.getElementById('api-key-input');
+    keyInput.value = localStorage.getItem('datapulse_api_key') || '';
+    document.getElementById('save-key-btn').addEventListener('click', async () => {
+      const val = keyInput.value.trim();
+      if (val) localStorage.setItem('datapulse_api_key', val);
+      else localStorage.removeItem('datapulse_api_key');
+      await loadDomains();
+      await refreshDashboard();
+    });
+
     async function loadDomains() {
-      const res = await fetch('/api/domains');
+      const res = await fetch('/api/domains', { headers: authHeaders() });
+      if (!res.ok) return;
       const data = await res.json();
       const items = data.domains || [];
       if (items.length > 0) {
@@ -279,9 +304,10 @@ def render_dashboard_html() -> str:
 
     async function refreshDashboard() {
       const [runsRes, quarRes] = await Promise.all([
-        fetch('/api/runs?limit=20'),
-        fetch('/api/quarantine?status=PENDING&limit=100')
+        fetch('/api/runs?limit=20', { headers: authHeaders() }),
+        fetch('/api/quarantine?status=PENDING&limit=100', { headers: authHeaders() })
       ]);
+      if (!runsRes.ok || !quarRes.ok) return;
       const runsData = await runsRes.json();
       const quarData = await quarRes.json();
       const runs = runsData.runs || [];
@@ -294,7 +320,10 @@ def render_dashboard_html() -> str:
       document.getElementById('kpi-quarantine').textContent = (quarData.items || []).length;
 
       if (runs.length > 0) {
-        const linRes = await fetch(`/api/runs/${runs[0].run_id}/lineage`);
+        const linRes = await fetch(
+          `/api/runs/${runs[0].run_id}/lineage`,
+          { headers: authHeaders() }
+        );
         if (linRes.ok) {
           const lin = await linRes.json();
           document.getElementById('kpi-score').textContent =
@@ -329,7 +358,11 @@ def render_dashboard_html() -> str:
 
       feedback.style.color = 'var(--muted)';
       feedback.textContent = 'Exécution du pipeline en cours...';
-      const resp = await fetch('/api/runs/upload', { method: 'POST', body: formData });
+      const resp = await fetch('/api/runs/upload', {
+        method: 'POST',
+        headers: authHeaders(),
+        body: formData,
+      });
       const data = await resp.json();
       if (resp.ok) {
         const rid = data.run.run_id.slice(0, 8);
@@ -347,7 +380,10 @@ def render_dashboard_html() -> str:
       e.preventDefault();
       const feedback = document.getElementById('lineage-feedback');
       const rid = document.getElementById('lineage-run-id').value.trim();
-      const resp = await fetch(`/api/runs/${encodeURIComponent(rid)}/lineage`);
+      const resp = await fetch(
+        `/api/runs/${encodeURIComponent(rid)}/lineage`,
+        { headers: authHeaders() }
+      );
       const data = await resp.json();
       if (resp.ok) {
         feedback.style.color = 'var(--ok)';
@@ -375,7 +411,7 @@ def render_dashboard_html() -> str:
       feedback.textContent = 'Extraction et audit SQL en cours...';
       const resp = await fetch('/api/runs/sql', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(payload),
       });
       const data = await resp.json();
@@ -404,7 +440,7 @@ def render_dashboard_html() -> str:
       feedback.textContent = 'Scan du répertoire en cours...';
       const resp = await fetch('/api/watcher/scan', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(payload),
       });
       const data = await resp.json();
@@ -424,7 +460,10 @@ def render_dashboard_html() -> str:
       const domain = document.getElementById('drift-domain').value.trim();
       feedback.style.color = 'var(--muted)';
       feedback.textContent = 'Calcul KS / PSI / Jensen-Shannon en cours...';
-      const resp = await fetch(`/api/diff?domain=${encodeURIComponent(domain)}`);
+      const resp = await fetch(
+        `/api/diff?domain=${encodeURIComponent(domain)}`,
+        { headers: authHeaders() }
+      );
       const data = await resp.json();
       if (resp.ok) {
         const sCount = (data.schema_drifts || []).length;
@@ -457,7 +496,7 @@ def render_dashboard_html() -> str:
       feedback.textContent = 'Envoi de la notification de test...';
       const resp = await fetch('/api/alerts/test', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(body),
       });
       const data = await resp.json();
