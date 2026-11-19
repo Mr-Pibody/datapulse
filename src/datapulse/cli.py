@@ -1,4 +1,4 @@
-"""Interface en ligne de commande DataPulse V13."""
+"""Interface en ligne de commande DataPulse V14."""
 
 from __future__ import annotations
 
@@ -150,7 +150,7 @@ def _finalize_and_report(
         domain=resolved_domain,
         source_file=source_label,
         file_hash_sha256=file_hash,
-        config_version=str(config.get("version", "13.0")),
+        config_version=str(config.get("version", "14.0")),
         row_count=row_count,
         duration_ms=telemetry.total_duration_ms,
         peak_memory_kb=peak_memory_kb,
@@ -199,7 +199,7 @@ def _finalize_and_report(
         config=config,
     )
 
-    print(f"\n=== DataPulse V13 | Run {run_id[:8]} ({resolved_domain} | {mode_label}) ===")
+    print(f"\n=== DataPulse V14 | Run {run_id[:8]} ({resolved_domain} | {mode_label}) ===")
     print(f"Source      : {source_label} ({row_count} lignes)")
     print(
         f"Score Qual. : {quality_info['score']}/100 (Grade {quality_info['grade']}) | "
@@ -797,7 +797,7 @@ def alerts_test_cmd(
         print("Aucun canal configuré (--webhook-url, --slack-url, --discord-url ou env).")
         return int(ExitCode.EXECUTION_ERROR)
 
-    print("\n=== Test des notifications DataPulse V13 ===")
+    print("\n=== Test des notifications DataPulse V14 ===")
     has_failure = False
     for r in results:
         print(f"  - {r['channel']:<10} : {r['status']} ({r['detail']})")
@@ -841,7 +841,7 @@ def watch_cmd(
     db_path: str = "db/datapulse.sqlite",
 ) -> int:
     target = config_path or watch_dir or ""
-    print(f"\n=== Orchestrateur DataPulse V13 démarré ({target}) ===")
+    print(f"\n=== Orchestrateur DataPulse V14 démarré ({target}) ===")
     summary = watch_loop(
         watch_dir=watch_dir,
         config_path=config_path,
@@ -863,7 +863,7 @@ def watch_cmd(
 
 def show_watch_status(db_path: str = "db/datapulse.sqlite", limit: int = 20) -> int:
     status = get_watcher_status(db_path=db_path, limit=limit)
-    print("\n=== État de l'Orchestrateur DataPulse V13 ===")
+    print("\n=== État de l'Orchestrateur DataPulse V14 ===")
     print(f"Fichiers suivis : {status['files_count']} | Tâches planifiées : {status['jobs_count']}")
     for f in status["recent_files"]:
         print(
@@ -903,7 +903,7 @@ def serve_api(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="datapulse",
-        description="DataPulse V13 — Observatoire Zero-Trust de qualité, lineage et télémétrie",
+        description="DataPulse V14 — Observatoire Zero-Trust de qualité, lineage et télémétrie",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 

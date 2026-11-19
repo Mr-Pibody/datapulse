@@ -1,4 +1,4 @@
-"""API REST FastAPI, RBAC Zero-Trust et observabilité DataPulse V13."""
+"""API REST FastAPI, RBAC Zero-Trust et observabilité DataPulse V14."""
 
 from __future__ import annotations
 
@@ -92,7 +92,7 @@ def create_app(
     """Construit l'instance FastAPI configurée avec contrôle d'accès RBAC."""
     app = FastAPI(
         title="DataPulse API",
-        version="13.0.0",
+        version="14.0.0",
         description="API REST Zero-Trust de gouvernance, Data Lineage, RBAC et Prometheus.",
     )
 
@@ -192,7 +192,7 @@ def create_app(
         storage = _storage()
         return {
             "status": "ok",
-            "version": "13.0.0",
+            "version": "14.0.0",
             "db_path": str(storage.db_path),
             "auth_enforced": (
                 auth_enabled if auth_enabled is not None else has_active_api_keys(db_path)
