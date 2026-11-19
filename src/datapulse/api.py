@@ -1,4 +1,4 @@
-"""API REST FastAPI, RBAC Zero-Trust, RGPD/PII, Synthèse Chaos & Lineage DataPulse V16."""
+"""API REST FastAPI, RBAC Zero-Trust, RGPD/PII, Synthèse Chaos & Lineage DataPulse V17."""
 
 from __future__ import annotations
 
@@ -14,6 +14,17 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from pydantic import BaseModel
 
 from datapulse.alerts import list_alert_history, send_test_alert
+from datapulse.catalog import (
+    delete_glossary_term,
+    get_asset,
+    get_catalog_summary,
+    list_assets,
+    list_glossary_terms,
+    register_asset,
+    search_catalog,
+    sync_catalog_from_configs,
+    upsert_glossary_term,
+)
 from datapulse.cli import run_pipeline, run_sql_pipeline
 from datapulse.config_loader import ConfigError
 from datapulse.dashboard import render_dashboard_html
@@ -107,7 +118,7 @@ def create_app(
     """Construit l'instance FastAPI configurée avec contrôle d'accès RBAC."""
     app = FastAPI(
         title="DataPulse API",
-        version="16.0.0",
+        version="17.0.0",
         description="API REST Zero-Trust de gouvernance, RGPD/PII, Synthèse Chaos et Lineage.",
     )
 
@@ -207,7 +218,7 @@ def create_app(
         storage = _storage()
         return {
             "status": "ok",
-            "version": "16.0.0",
+            "version": "17.0.0",
             "db_path": str(storage.db_path),
             "auth_enforced": (
                 auth_enabled if auth_enabled is not None else has_active_api_keys(db_path)
@@ -526,6 +537,105 @@ def create_app(
             "exit_code": exit_code,
             "run": latest[0] if latest else None,
         }
+
+    @app.get("/api/catalog/summary")
+    def api_catalog_summary() -> dict[str, Any]:
+        return get_catalog_summary(db_path)
+
+    @app.get("/api/catalog/assets")
+    def api_catalog_assets(
+        classification: str | None = None,
+        sla_status: str | None = None,
+        q: str | None = None,
+    ) -> dict[str, Any]:
+        items = list_assets(
+            db_path,
+            classification=classification,
+            sla_status=sla_status,
+            query=q,
+        )
+        return {"count": len(items), "assets": items}
+
+    @app.get("/api/catalog/assets/{domain}")
+    def api_catalog_asset_detail(
+        domain: str,
+    ) -> dict[str, Any]:
+        asset = get_asset(db_path, domain)
+        if asset is None:
+            raise HTTPException(status_code=404, detail=f"Actif introuvable: {domain}")
+        return asset
+
+    @app.post("/api/catalog/assets", dependencies=[Depends(_require_role("operator"))])
+    def api_catalog_register_asset(
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        domain = str(payload.get("domain", "")).strip()
+        if not domain:
+            raise HTTPException(status_code=400, detail="Le champ 'domain' est requis.")
+        try:
+            return register_asset(
+                db_path,
+                domain=domain,
+                display_name=payload.get("display_name"),
+                owner=str(payload.get("owner", "data-engineering@datapulse.local")),
+                steward=str(payload.get("steward", "governance@datapulse.local")),
+                classification=str(payload.get("classification", "INTERNAL")),
+                description=str(payload.get("description", "")),
+                tags=list(payload.get("tags") or []),
+                sla_max_age_hours=float(payload.get("sla_max_age_hours", 24.0)),
+                schema_columns=list(payload.get("schema_columns") or []),
+                source_uri=str(payload.get("source_uri", "")),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/catalog/sync", dependencies=[Depends(_require_role("operator"))])
+    def api_catalog_sync(
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        cfg_dir = str((payload or {}).get("config_dir", "config"))
+        return sync_catalog_from_configs(db_path, config_dir=cfg_dir)
+
+    @app.get("/api/catalog/glossary")
+    def api_catalog_glossary(
+        domain: str | None = None,
+        q: str | None = None,
+    ) -> dict[str, Any]:
+        terms = list_glossary_terms(db_path, domain=domain, query=q)
+        return {"count": len(terms), "terms": terms}
+
+    @app.post("/api/catalog/glossary", dependencies=[Depends(_require_role("operator"))])
+    def api_catalog_upsert_glossary(
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        try:
+            return upsert_glossary_term(
+                db_path,
+                term=str(payload.get("term", "")),
+                definition=str(payload.get("definition", "")),
+                domain=str(payload.get("domain", "global")),
+                owner=str(payload.get("owner", "business-steward@datapulse.local")),
+                formula=str(payload.get("formula", "")),
+                synonyms=list(payload.get("synonyms") or []),
+                related_columns=list(payload.get("related_columns") or []),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.delete("/api/catalog/glossary/{term}")
+    def api_catalog_delete_glossary(
+        term: str,
+    ) -> dict[str, Any]:
+        deleted = delete_glossary_term(db_path, term)
+        if not deleted:
+            raise HTTPException(status_code=404, detail=f"Terme introuvable: {term}")
+        return {"deleted": True, "term": term}
+
+    @app.get("/api/catalog/search")
+    def api_catalog_search(
+        q: str = "",
+    ) -> dict[str, Any]:
+        return search_catalog(db_path, q)
 
     return app
 

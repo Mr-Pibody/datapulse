@@ -1,4 +1,4 @@
-"""Dashboard web interactif multi-onglets pour l'observatoire DataPulse V16."""
+"""Dashboard web interactif multi-onglets pour l'observatoire DataPulse V17."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ def render_dashboard_html() -> str:
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>DataPulse V16 — Observatoire Zero-Trust, RGPD/PII &amp; Chaos Engineering</title>
+  <title>DataPulse V17 — Observatoire Zero-Trust, RGPD/PII &amp; Chaos Engineering</title>
   <style>
     :root {
       --bg: #080d1a;
@@ -216,7 +216,7 @@ def render_dashboard_html() -> str:
         <a href="/docs" style="color: var(--accent); text-decoration: none; font-size: 0.9rem;">
           /docs
         </a>
-        <span class="badge">v16.0.0</span>
+        <span class="badge">v17.0.0</span>
       </div>
     </header>
 
@@ -488,6 +488,56 @@ def render_dashboard_html() -> str:
       </section>
     </div>
   </div>
+
+    <section class="card" style="margin-top: 1.5rem;">
+      <div style="display:flex;justify-content:space-between;align-items:center;
+                  flex-wrap:wrap;gap:0.75rem;margin-bottom:1rem;">
+        <div>
+          <h2 style="font-size:1.15rem;color:var(--accent);">
+            Data Catalog &amp; SLA Freshness Explorer (v17)
+          </h2>
+          <p style="color:var(--muted);font-size:0.88rem;">
+            Gouvernance des actifs, classification RGPD, SLA et glossaire metier.
+          </p>
+        </div>
+        <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+          <input id="cat-search-input" type="text" placeholder="Rechercher..."
+                 style="padding:0.45rem 0.7rem;border-radius:6px;
+                        border:1px solid var(--border);
+                        background:var(--surface);color:var(--text);" />
+          <button type="button" onclick="loadCatalogData()"
+                  style="padding:0.45rem 0.85rem;border-radius:6px;
+                         border:1px solid var(--border);
+                         background:var(--card);color:var(--text);cursor:pointer;">
+            Filtrer
+          </button>
+          <button type="button" onclick="syncCatalogConfigs()"
+                  style="padding:0.45rem 0.85rem;border-radius:6px;border:none;
+                         background:var(--accent);color:#080d1a;
+                         font-weight:600;cursor:pointer;">
+            Sync YAML
+          </button>
+        </div>
+      </div>
+      <div id="cat-kpis"
+           style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));
+                  gap:0.75rem;margin-bottom:1rem;"></div>
+      <div style="overflow-x:auto;">
+        <table style="width:100%;border-collapse:collapse;font-size:0.88rem;">
+          <thead>
+            <tr style="border-bottom:1px solid var(--border);text-align:left;color:var(--muted);">
+              <th style="padding:0.5rem;">Domaine</th>
+              <th style="padding:0.5rem;">Classification</th>
+              <th style="padding:0.5rem;">Owner</th>
+              <th style="padding:0.5rem;">Colonnes / PII</th>
+              <th style="padding:0.5rem;">SLA Fraicheur</th>
+            </tr>
+          </thead>
+          <tbody id="cat-assets-tbody"></tbody>
+        </table>
+      </div>
+      <p id="cat-feedback" style="margin-top:0.6rem;font-size:0.85rem;color:var(--muted);"></p>
+    </section>
 
   <script>
     let cachedRuns = [];
@@ -928,6 +978,79 @@ def render_dashboard_html() -> str:
     loadHealthStatus();
     loadDomains();
     refreshDashboard();
+}
+    loadCatalogData();
+
+  
+    async function loadCatalogData() {
+      const q = (document.getElementById('cat-search-input')?.value || '').trim();
+      const kpiBox = document.getElementById('cat-kpis');
+      const tbody = document.getElementById('cat-assets-tbody');
+      if (!kpiBox || !tbody) return;
+      try {
+        const url = '/api/catalog/assets' + (q ? '?q=' + encodeURIComponent(q) : '');
+        const [sumR, astR] = await Promise.all([
+          fetch('/api/catalog/summary', { headers: authHeaders() }),
+          fetch(url, { headers: authHeaders() })
+        ]);
+        if (!sumR.ok || !astR.ok) return;
+        const sum = await sumR.json();
+        const ast = await astR.json();
+        const boxStyle = 'padding:0.65rem;background:var(--surface);'
+          + 'border:1px solid var(--border);border-radius:8px;';
+        kpiBox.innerHTML = `
+          <div style="${boxStyle}">
+            <div style="color:var(--muted);font-size:0.78rem;">Actifs</div>
+            <div style="font-size:1.25rem;font-weight:700;">${sum.total_assets ?? 0}</div>
+          </div>
+          <div style="${boxStyle}">
+            <div style="color:var(--muted);font-size:0.78rem;">Conformite SLA</div>
+            <div style="font-size:1.25rem;font-weight:700;color:var(--ok);">
+              ${sum.sla_compliance_pct ?? 100}%
+            </div>
+          </div>
+          <div style="${boxStyle}">
+            <div style="color:var(--muted);font-size:0.78rem;">SLA Breached</div>
+            <div style="font-size:1.25rem;font-weight:700;color:var(--err);">
+              ${sum.breached_assets ?? 0}
+            </div>
+          </div>
+          <div style="${boxStyle}">
+            <div style="color:var(--muted);font-size:0.78rem;">Glossaire</div>
+            <div style="font-size:1.25rem;font-weight:700;color:var(--accent-2);">
+              ${sum.glossary_terms ?? 0}
+            </div>
+          </div>
+        `;
+        tbody.innerHTML = (ast.assets || []).map(a => {
+          const col = a.sla_status === 'BREACHED' ? 'var(--err)' : 'var(--ok)';
+          return `<tr style="border-bottom:1px solid rgba(51,65,85,0.5);">
+            <td style="padding:0.5rem;font-weight:600;">${a.domain}</td>
+            <td style="padding:0.5rem;">${a.classification}</td>
+            <td style="padding:0.5rem;color:var(--muted);">${a.owner}</td>
+            <td style="padding:0.5rem;">${a.column_count ?? 0} (${a.pii_column_count ?? 0} PII)</td>
+            <td style="padding:0.5rem;font-weight:600;color:${col};">${a.sla_status}</td>
+          </tr>`;
+        }).join('');
+      } catch (_) {}
+    }
+    async function syncCatalogConfigs() {
+      const fb = document.getElementById('cat-feedback');
+      const r = await fetch('/api/catalog/sync', {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ config_dir: 'config' })
+      });
+      const d = await r.json();
+      if (fb) {
+        fb.textContent = r.ok
+          ? `Catalogue synchronise (${d.synced_count} domaines).`
+          : `Erreur : ${d.detail || 'Acces refuse'}`;
+      }
+      if (r.ok) loadCatalogData();
+    }
+    loadCatalogData();
+
   </script>
 </body>
 </html>

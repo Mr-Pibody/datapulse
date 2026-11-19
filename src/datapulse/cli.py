@@ -994,6 +994,46 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
+    # --- v17.0 : Data Catalog, SLA & Glossaire ---
+    p_cat = sub.add_parser(
+        "catalog",
+        help="Gouvernance Data Catalog, fraicheur SLA et glossaire metier",
+    )
+    cat_sub = p_cat.add_subparsers(dest="catalog_action", required=True)
+
+    p_cat_sync = cat_sub.add_parser("sync", help="Synchroniser les contrats YAML")
+    p_cat_sync.add_argument("--config-dir", default="config", help="Repertoire YAML")
+    p_cat_sync.add_argument("--db", default="data/datapulse.db", help="Base SQLite cible")
+
+    p_cat_list = cat_sub.add_parser("list", help="Lister les actifs du catalogue")
+    p_cat_list.add_argument("--classification", default=None, help="Classification")
+    p_cat_list.add_argument("--sla-status", default=None, help="Statut SLA")
+    p_cat_list.add_argument("--q", default=None, help="Recherche texte")
+    p_cat_list.add_argument("--db", default="data/datapulse.db", help="Base SQLite cible")
+
+    p_cat_reg = cat_sub.add_parser("register", help="Enregistrer un actif")
+    p_cat_reg.add_argument("--domain", required=True, help="Nom du domaine")
+    p_cat_reg.add_argument("--display-name", default=None, help="Nom d'affichage")
+    p_cat_reg.add_argument(
+        "--owner", default="data-engineering@datapulse.local", help="Proprietaire"
+    )
+    p_cat_reg.add_argument("--steward", default="governance@datapulse.local", help="Data steward")
+    p_cat_reg.add_argument("--classification", default="INTERNAL", help="Sensibilite")
+    p_cat_reg.add_argument("--description", default="", help="Description metier")
+    p_cat_reg.add_argument("--sla-hours", type=float, default=24.0, help="SLA (heures)")
+    p_cat_reg.add_argument("--db", default="data/datapulse.db", help="Base SQLite cible")
+
+    p_cat_glo = cat_sub.add_parser("glossary", help="Ajouter un terme metier")
+    p_cat_glo.add_argument("--term", required=True, help="Terme metier")
+    p_cat_glo.add_argument("--definition", required=True, help="Definition officielle")
+    p_cat_glo.add_argument("--domain", default="global", help="Domaine associe")
+    p_cat_glo.add_argument("--formula", default="", help="Formule de calcul")
+    p_cat_glo.add_argument("--db", default="data/datapulse.db", help="Base SQLite cible")
+
+    p_cat_search = cat_sub.add_parser("search", help="Rechercher dans le catalogue")
+    p_cat_search.add_argument("query", help="Mot-cle de recherche")
+    p_cat_search.add_argument("--db", default="data/datapulse.db", help="Base SQLite cible")
+
     p_run = sub.add_parser("run-all", help="Exécute le pipeline complet sur un fichier")
     p_run.add_argument("--file", required=True, help="Chemin vers CSV/Excel/JSON/JSONL/Parquet")
     p_run.add_argument("--domain", required=True, help="Nom du domaine ou 'auto'")
@@ -1239,6 +1279,62 @@ def main(argv: list[str] | None = None) -> int:
             )
         if args.command == "watch-status":
             return show_watch_status(limit=args.limit)
+        if args.command == "catalog":
+            import json as _json
+
+            from datapulse.catalog import (
+                list_assets,
+                register_asset,
+                search_catalog,
+                sync_catalog_from_configs,
+                upsert_glossary_term,
+            )
+
+            if args.catalog_action == "sync":
+                res = sync_catalog_from_configs(args.db, config_dir=args.config_dir)
+                print(_json.dumps(res, indent=2, ensure_ascii=False))
+                return 0
+            if args.catalog_action == "list":
+                items = list_assets(
+                    args.db,
+                    classification=args.classification,
+                    sla_status=args.sla_status,
+                    query=args.q,
+                )
+                print(
+                    _json.dumps(
+                        {"count": len(items), "assets": items}, indent=2, ensure_ascii=False
+                    )
+                )
+                return 0
+            if args.catalog_action == "register":
+                asset = register_asset(
+                    args.db,
+                    domain=args.domain,
+                    display_name=args.display_name,
+                    owner=args.owner,
+                    steward=args.steward,
+                    classification=args.classification,
+                    description=args.description,
+                    sla_max_age_hours=args.sla_hours,
+                )
+                print(_json.dumps(asset, indent=2, ensure_ascii=False))
+                return 0
+            if args.catalog_action == "glossary":
+                term_obj = upsert_glossary_term(
+                    args.db,
+                    term=args.term,
+                    definition=args.definition,
+                    domain=args.domain,
+                    formula=args.formula,
+                )
+                print(_json.dumps(term_obj, indent=2, ensure_ascii=False))
+                return 0
+            if args.catalog_action == "search":
+                found = search_catalog(args.db, args.query)
+                print(_json.dumps(found, indent=2, ensure_ascii=False))
+                return 0
+
         if args.command == "serve":
             return serve_api(host=args.host, port=args.port, db_path=args.db)
         return int(ExitCode.EXECUTION_ERROR)

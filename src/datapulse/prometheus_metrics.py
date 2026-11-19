@@ -26,7 +26,7 @@ def collect_observability_snapshot(db_path: str | Path = "db/datapulse.sqlite") 
     """Agrège toutes les métriques opérationnelles et qualité depuis SQLite."""
     path = Path(db_path)
     snapshot: dict[str, Any] = {
-        "version": "16.0.0",
+        "version": "17.0.0",
         "runs_by_domain_status": [],
         "totals_by_domain": [],
         "latest_quality_by_domain": [],
@@ -219,7 +219,7 @@ def check_liveness() -> dict[str, Any]:
     """Sonde Liveness (processus HTTP actif)."""
     return {
         "status": "alive",
-        "version": "16.0.0",
+        "version": "17.0.0",
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -240,7 +240,7 @@ def check_readiness(db_path: str | Path = "db/datapulse.sqlite") -> tuple[bool, 
         tables_count = int(tables_row[0]) if tables_row else 0
         payload: dict[str, Any] = {
             "status": "ready" if ok else "degraded",
-            "version": "16.0.0",
+            "version": "17.0.0",
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "checks": {
                 "sqlite_ping": ok,
@@ -253,7 +253,7 @@ def check_readiness(db_path: str | Path = "db/datapulse.sqlite") -> tuple[bool, 
     except Exception as exc:
         return False, {
             "status": "unavailable",
-            "version": "16.0.0",
+            "version": "17.0.0",
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "checks": {
                 "sqlite_ping": False,
