@@ -216,7 +216,7 @@ def render_dashboard_html() -> str:
         <a href="/docs" style="color: var(--accent); text-decoration: none; font-size: 0.9rem;">
           /docs
         </a>
-        <span class="badge">v16.0.0</span>
+        <span class="badge">v17.0.0</span>
       </div>
     </header>
 
@@ -1101,3 +1101,5 @@ def render_dashboard_html() -> str:
 </body>
 </html>
 """
+
+
