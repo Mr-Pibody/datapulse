@@ -72,3 +72,8 @@ pytest --cov=datapulse --cov-report=term-missing
 - **Chaos Lab (v16)** : Generateur synthetique et injection controlee d anomalies.
 - **Enterprise Data Catalog & SLA (v17)** : Cartographie YAML, extraction PII et glossaire metier.
 - **Observatoire Web Zero-Terminal & Durcissement Jury (v18.0 - v18.2)** : Interface 7 onglets, Stories Sante, Replay de Quarantaine, signatures HMAC-SHA256, PSI lisse de Laplace et distance de Wasserstein-1 (95/95 tests).
+
+## Auteur & Licence
+
+- **Auteur & Architecte :** Nugbognon Elfried ZANNOU (`Mr-Pibody`)
+- **Licence :** Apache License 2.0 — toute réutilisation ou distribution doit conserver la mention de copyright originale (`LICENSE`).
