@@ -1,4 +1,4 @@
-"""Dashboard web interactif multi-onglets pour l'observatoire DataPulse V15."""
+"""Dashboard web interactif multi-onglets pour l'observatoire DataPulse V16."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ def render_dashboard_html() -> str:
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>DataPulse V15 — Observatoire Zero-Trust, RGPD/PII, Lineage &amp; Prometheus</title>
+  <title>DataPulse V16 — Observatoire Zero-Trust, RGPD/PII &amp; Chaos Engineering</title>
   <style>
     :root {
       --bg: #080d1a;
@@ -136,7 +136,7 @@ def render_dashboard_html() -> str:
       gap: 0.75rem;
       align-items: center;
     }
-    input[type="file"], input[type="text"], input[type="password"], select {
+    input[type="file"], input[type="text"], input[type="password"], input[type="number"], select {
       background: var(--card);
       color: var(--text);
       border: 1px solid var(--border);
@@ -180,6 +180,13 @@ def render_dashboard_html() -> str:
       gap: 0.75rem;
       margin-bottom: 0.75rem;
     }
+    .chaos-chips {
+      display: flex;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+      margin-top: 0.75rem;
+      font-size: 0.86rem;
+    }
   </style>
 </head>
 <body>
@@ -190,7 +197,7 @@ def render_dashboard_html() -> str:
         <div>
           <h1 style="font-size: 1.35rem;">DataPulse Observatoire</h1>
           <p style="color: var(--muted); font-size: 0.85rem;">
-            Gouvernance Qualité, Conformité RGPD/PII, Data Lineage &amp; Sécurité Zero-Trust
+            Gouvernance Qualité, RGPD/PII, Chaos Engineering, Data Lineage &amp; Zero-Trust
           </p>
         </div>
       </div>
@@ -209,13 +216,14 @@ def render_dashboard_html() -> str:
         <a href="/docs" style="color: var(--accent); text-decoration: none; font-size: 0.9rem;">
           /docs
         </a>
-        <span class="badge">v15.0.0</span>
+        <span class="badge">v16.0.0</span>
       </div>
     </header>
 
     <nav class="tabs" role="tablist">
       <button type="button" class="tab-btn active" data-tab="overview">Vue d'ensemble</button>
       <button type="button" class="tab-btn" data-tab="pipelines">Pipelines &amp; SQL</button>
+      <button type="button" class="tab-btn" data-tab="synth">Labo Chaos &amp; Synthèse</button>
       <button type="button" class="tab-btn" data-tab="pii">Gouvernance PII &amp; RGPD</button>
       <button type="button" class="tab-btn" data-tab="drift">Drift, Lineage &amp; Alertes</button>
       <button type="button" class="tab-btn" data-tab="security">Sécurité &amp; Audit RBAC</button>
@@ -330,7 +338,63 @@ def render_dashboard_html() -> str:
       </section>
     </div>
 
-    <!-- ONGLET 3 : GOUVERNANCE PII & RGPD -->
+    <!-- ONGLET 3 : LABO CHAOS & SYNTHÈSE -->
+    <div class="tab-pane" id="tab-synth">
+      <section class="panel">
+        <h2>Générateur de Données Synthétiques &amp; Chaos Engineering</h2>
+        <p style="color: var(--muted); font-size: 0.88rem; margin-bottom: 1rem;">
+          Génère des jeux de données réalistes depuis un contrat YAML et injecte des anomalies
+          contrôlées pour valider la résilience des pipelines.
+        </p>
+        <form class="upload-bar" id="synth-form">
+          <select id="synth-domain-select">
+            <option value="commerce">commerce</option>
+            <option value="finance">finance</option>
+            <option value="administration">administration</option>
+          </select>
+          <input
+            type="number"
+            id="synth-rows"
+            value="200"
+            min="10"
+            max="50000"
+            style="width: 115px;"
+            title="Nombre de lignes"
+          />
+          <select id="synth-chaos-rate">
+            <option value="0">0% Chaos (Données saines)</option>
+            <option value="0.10">10% Chaos</option>
+            <option value="0.25" selected>25% Chaos</option>
+            <option value="0.50">50% Chaos</option>
+          </select>
+          <label style="display: flex; align-items: center; gap: 0.4rem; font-size: 0.9rem;">
+            <input type="checkbox" id="synth-auto-audit" checked />
+            Auditer immédiatement
+          </label>
+          <button type="submit" class="primary">Générer le Dataset</button>
+        </form>
+        <div class="chaos-chips">
+          <label><input type="checkbox" class="chaos-mode" value="nulls" checked /> Nulls</label>
+          <label>
+            <input type="checkbox" class="chaos-mode" value="outliers" checked /> Outliers MAD
+          </label>
+          <label>
+            <input type="checkbox" class="chaos-mode" value="negatives" checked /> Négatifs
+          </label>
+          <label>
+            <input type="checkbox" class="chaos-mode" value="invalid_category" /> Catégorie invalide
+          </label>
+          <label><input type="checkbox" class="chaos-mode" value="duplicates" /> Doublons</label>
+          <label>
+            <input type="checkbox" class="chaos-mode" value="schema_drift" /> Schema Drift
+          </label>
+        </div>
+        <div id="synth-feedback" class="feedback"></div>
+        <div id="synth-preview-box" style="margin-top: 1rem;"></div>
+      </section>
+    </div>
+
+    <!-- ONGLET 4 : GOUVERNANCE PII & RGPD -->
     <div class="tab-pane" id="tab-pii">
       <section class="panel">
         <h2>Détection &amp; Anonymisation RGPD des Données Personnelles (PII)</h2>
@@ -359,7 +423,7 @@ def render_dashboard_html() -> str:
       </section>
     </div>
 
-    <!-- ONGLET 4 : DRIFT, LINEAGE & ALERTES -->
+    <!-- ONGLET 5 : DRIFT, LINEAGE & ALERTES -->
     <div class="tab-pane" id="tab-drift">
       <section class="panel">
         <h2>Data Lineage &amp; Certificat d'Audit Cryptographique</h2>
@@ -400,7 +464,7 @@ def render_dashboard_html() -> str:
       </section>
     </div>
 
-    <!-- ONGLET 5 : SÉCURITÉ & AUDIT RBAC -->
+    <!-- ONGLET 6 : SÉCURITÉ & AUDIT RBAC -->
     <div class="tab-pane" id="tab-security">
       <section class="panel">
         <div class="toolbar">
@@ -482,6 +546,12 @@ def render_dashboard_html() -> str:
         document.getElementById('domain-select').innerHTML = optionsHtml;
         document.getElementById('sql-domain-select').innerHTML = optionsHtml;
         document.getElementById('watch-domain-select').innerHTML = optionsHtml;
+        const concrete = items.filter(d => d.domain !== 'auto');
+        if (concrete.length > 0) {
+          document.getElementById('synth-domain-select').innerHTML = concrete
+            .map(d => `<option value="${d.domain}">${d.domain}</option>`)
+            .join('');
+        }
       }
     }
 
@@ -537,6 +607,53 @@ def render_dashboard_html() -> str:
       }
       renderRunsTable();
     }
+
+    document.getElementById('synth-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const feedback = document.getElementById('synth-feedback');
+      const box = document.getElementById('synth-preview-box');
+      const modes = Array.from(document.querySelectorAll('.chaos-mode:checked')).map(c => c.value);
+      const payload = {
+        domain: document.getElementById('synth-domain-select').value,
+        rows: Number(document.getElementById('synth-rows').value || 200),
+        chaos_rate: Number(document.getElementById('synth-chaos-rate').value || 0),
+        chaos_modes: modes,
+        auto_audit: document.getElementById('synth-auto-audit').checked,
+        quarantine: true,
+      };
+      feedback.style.color = 'var(--muted)';
+      feedback.textContent = 'Génération synthétique & injection de chaos en cours...';
+      const resp = await fetch('/api/synth/generate', {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(payload),
+      });
+      const data = await resp.json();
+      if (resp.ok) {
+        feedback.style.color = 'var(--ok)';
+        const auditMsg = data.audit && data.audit.run
+          ? ` | Audit Run ${data.audit.run.run_id.slice(0, 8)} : ` +
+            `${data.audit.run.findings_count} incident(s) capturé(s)`
+          : '';
+        feedback.textContent =
+          `${data.rows_generated} lignes générées (${data.output_path}) | ` +
+          `Fautes injectées : ${data.injected_faults_count}${auditMsg}`;
+        const preview = data.preview_rows || [];
+        if (preview.length > 0) {
+          const headers = Object.keys(preview[0]);
+          const thead = headers.map(h => `<th>${h}</th>`).join('');
+          const tbody = preview.map(row =>
+            `<tr>${headers.map(h => `<td>${row[h]}</td>`).join('')}</tr>`
+          ).join('');
+          box.innerHTML =
+            `<table><thead><tr>${thead}</tr></thead><tbody>${tbody}</tbody></table>`;
+        }
+        if (data.audit) await refreshDashboard();
+      } else {
+        feedback.style.color = 'var(--err)';
+        feedback.textContent = `Erreur : ${data.detail || 'Échec de génération'}`;
+      }
+    });
 
     document.getElementById('pii-scan-btn').addEventListener('click', async () => {
       const fileInput = document.getElementById('pii-file-input');

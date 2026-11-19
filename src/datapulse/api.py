@@ -1,4 +1,4 @@
-"""API REST FastAPI, RBAC Zero-Trust, RGPD/PII et observabilité DataPulse V15."""
+"""API REST FastAPI, RBAC Zero-Trust, RGPD/PII, Synthèse Chaos & Lineage DataPulse V16."""
 
 from __future__ import annotations
 
@@ -42,6 +42,7 @@ from datapulse.security import (
 )
 from datapulse.sql_connector import list_sql_tables
 from datapulse.storage import DataPulseStorage
+from datapulse.synth import generate_synthetic_file
 from datapulse.watcher import get_watcher_status, scan_directory_once
 
 
@@ -83,6 +84,18 @@ class ApiKeyCreateRequest(BaseModel):
     role: str = "viewer"
 
 
+class SynthGenerateRequest(BaseModel):
+    """Charge utile JSON pour générer un dataset synthétique avec chaos optionnel."""
+
+    domain: str = "commerce"
+    rows: int = 200
+    chaos_rate: float = 0.0
+    chaos_modes: list[str] | None = None
+    seed: int = 42
+    auto_audit: bool = False
+    quarantine: bool = True
+
+
 def create_app(
     db_path: str = "db/datapulse.sqlite",
     reports_dir: str = "reports",
@@ -94,8 +107,8 @@ def create_app(
     """Construit l'instance FastAPI configurée avec contrôle d'accès RBAC."""
     app = FastAPI(
         title="DataPulse API",
-        version="15.0.0",
-        description="API REST Zero-Trust de gouvernance, RGPD/PII, Data Lineage et Prometheus.",
+        version="16.0.0",
+        description="API REST Zero-Trust de gouvernance, RGPD/PII, Synthèse Chaos et Lineage.",
     )
 
     def _storage() -> DataPulseStorage:
@@ -194,7 +207,7 @@ def create_app(
         storage = _storage()
         return {
             "status": "ok",
-            "version": "15.0.0",
+            "version": "16.0.0",
             "db_path": str(storage.db_path),
             "auth_enforced": (
                 auth_enabled if auth_enabled is not None else has_active_api_keys(db_path)
@@ -217,6 +230,38 @@ def create_app(
             content=body,
             media_type="text/plain; version=0.0.4; charset=utf-8",
         )
+
+    @app.post("/api/synth/generate", dependencies=[Depends(_require_role("operator"))])
+    def generate_synth_endpoint(payload: SynthGenerateRequest) -> dict[str, Any]:
+        try:
+            manifest = generate_synthetic_file(
+                domain=payload.domain,
+                rows=payload.rows,
+                chaos_rate=payload.chaos_rate,
+                chaos_modes=payload.chaos_modes,
+                seed=payload.seed,
+                processed_dir=processed_dir,
+                configs_dir=configs_dir,
+            )
+            audit_summary: dict[str, Any] | None = None
+            if payload.auto_audit:
+                exit_code = run_pipeline(
+                    file_path=str(manifest["output_path"]),
+                    domain=str(manifest["domain"]),
+                    db_path=db_path,
+                    reports_dir=reports_dir,
+                    processed_dir=processed_dir,
+                    configs_dir=configs_dir,
+                    quarantine=payload.quarantine,
+                )
+                latest = _storage().get_history(domain=str(manifest["domain"]), limit=1)
+                audit_summary = {
+                    "exit_code": exit_code,
+                    "run": latest[0] if latest else None,
+                }
+            return {**manifest, "audit": audit_summary}
+        except (DataPulseError, ConfigError, FileNotFoundError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/api/pii/scan", dependencies=[Depends(_require_role("viewer"))])
     async def scan_pii_endpoint(file: UploadFile = File(...)) -> dict[str, Any]:  # noqa: B008

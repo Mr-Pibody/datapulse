@@ -1,4 +1,4 @@
-"""Interface en ligne de commande DataPulse V15."""
+"""Interface en ligne de commande DataPulse V16."""
 
 from __future__ import annotations
 
@@ -56,6 +56,7 @@ from datapulse.sql_connector import (
     iter_sql_chunks,
 )
 from datapulse.storage import DataPulseStorage
+from datapulse.synth import generate_synthetic_file
 from datapulse.validator import validate_dataframe
 from datapulse.watcher import get_watcher_status, watch_loop
 
@@ -151,7 +152,7 @@ def _finalize_and_report(
         domain=resolved_domain,
         source_file=source_label,
         file_hash_sha256=file_hash,
-        config_version=str(config.get("version", "15.0")),
+        config_version=str(config.get("version", "16.0")),
         row_count=row_count,
         duration_ms=telemetry.total_duration_ms,
         peak_memory_kb=peak_memory_kb,
@@ -200,7 +201,7 @@ def _finalize_and_report(
         config=config,
     )
 
-    print(f"\n=== DataPulse V15 | Run {run_id[:8]} ({resolved_domain} | {mode_label}) ===")
+    print(f"\n=== DataPulse V16 | Run {run_id[:8]} ({resolved_domain} | {mode_label}) ===")
     print(f"Source      : {source_label} ({row_count} lignes)")
     print(
         f"Score Qual. : {quality_info['score']}/100 (Grade {quality_info['grade']}) | "
@@ -474,6 +475,52 @@ def run_sql_pipeline(
             tracemalloc.stop()
 
 
+def synth_cmd(
+    *,
+    domain: str,
+    rows: int = 200,
+    chaos_rate: float = 0.0,
+    chaos_modes: str | None = None,
+    seed: int = 42,
+    output_path: str | None = None,
+    run_audit: bool = False,
+    db_path: str = "db/datapulse.sqlite",
+    reports_dir: str = "reports",
+    processed_dir: str = "data/processed",
+    configs_dir: str = "configs",
+) -> int:
+    modes_list = [m.strip() for m in chaos_modes.split(",") if m.strip()] if chaos_modes else None
+    manifest = generate_synthetic_file(
+        domain=domain,
+        rows=rows,
+        chaos_rate=chaos_rate,
+        chaos_modes=modes_list,
+        seed=seed,
+        output_path=output_path,
+        processed_dir=processed_dir,
+        configs_dir=configs_dir,
+    )
+    print(f"\n=== Génération Synthétique & Chaos DataPulse V16 ({manifest['domain']}) ===")
+    print(f"Lignes générées   : {manifest['rows_generated']} (seed={manifest['seed']})")
+    print(
+        f"Chaos injecté     : taux={manifest['chaos_rate'] * 100:.1f}% | "
+        f"fautes={manifest['injected_faults_count']}"
+    )
+    print(f"Fichier généré    : {manifest['output_path']}\n")
+
+    if run_audit:
+        return run_pipeline(
+            file_path=str(manifest["output_path"]),
+            domain=str(manifest["domain"]),
+            db_path=db_path,
+            reports_dir=reports_dir,
+            processed_dir=processed_dir,
+            configs_dir=configs_dir,
+            quarantine=True,
+        )
+    return int(ExitCode.SUCCESS)
+
+
 def pii_scan_cmd(file_path: str) -> int:
     ingestion = ingest_file(file_path)
     report = scan_dataframe_pii(ingestion.dataframe)
@@ -506,7 +553,7 @@ def pii_mask_cmd(
         strategy=strategy,
         columns=col_list,
     )
-    print(f"\n=== Anonymisation RGPD DataPulse V15 (stratégie={summary['strategy']}) ===")
+    print(f"\n=== Anonymisation RGPD DataPulse V16 (stratégie={summary['strategy']}) ===")
     print(f"Colonnes masquées : {', '.join(summary['masked_columns']) or 'aucune'}")
     print(f"Cellules traitées : {summary['masked_cells_total']}")
     print(f"Export RGPD       : {summary['output_path']}\n")
@@ -837,7 +884,7 @@ def alerts_test_cmd(
         print("Aucun canal configuré (--webhook-url, --slack-url, --discord-url ou env).")
         return int(ExitCode.EXECUTION_ERROR)
 
-    print("\n=== Test des notifications DataPulse V15 ===")
+    print("\n=== Test des notifications DataPulse V16 ===")
     has_failure = False
     for r in results:
         print(f"  - {r['channel']:<10} : {r['status']} ({r['detail']})")
@@ -881,7 +928,7 @@ def watch_cmd(
     db_path: str = "db/datapulse.sqlite",
 ) -> int:
     target = config_path or watch_dir or ""
-    print(f"\n=== Orchestrateur DataPulse V15 démarré ({target}) ===")
+    print(f"\n=== Orchestrateur DataPulse V16 démarré ({target}) ===")
     summary = watch_loop(
         watch_dir=watch_dir,
         config_path=config_path,
@@ -903,7 +950,7 @@ def watch_cmd(
 
 def show_watch_status(db_path: str = "db/datapulse.sqlite", limit: int = 20) -> int:
     status = get_watcher_status(db_path=db_path, limit=limit)
-    print("\n=== État de l'Orchestrateur DataPulse V15 ===")
+    print("\n=== État de l'Orchestrateur DataPulse V16 ===")
     print(f"Fichiers suivis : {status['files_count']} | Tâches planifiées : {status['jobs_count']}")
     for f in status["recent_files"]:
         print(
@@ -943,7 +990,7 @@ def serve_api(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="datapulse",
-        description="DataPulse V15 — Observatoire Zero-Trust de qualité, RGPD/PII et lineage",
+        description="DataPulse V16 — Observatoire Zero-Trust de qualité, RGPD/PII, Synthèse Chaos",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -965,6 +1012,21 @@ def build_parser() -> argparse.ArgumentParser:
     p_sql.add_argument("--json-logs", action="store_true", help="Logs structurés JSON")
     p_sql.add_argument("--chunk-size", type=int, default=None, help="Streaming SQL par blocs")
     p_sql.add_argument("--quarantine", action="store_true", help="Isole les lignes rejetées")
+
+    p_synth = sub.add_parser("synth", help="Génère un dataset synthétique avec chaos optionnel")
+    p_synth.add_argument("--domain", default="commerce", help="Domaine YAML cible")
+    p_synth.add_argument("--rows", type=int, default=200, help="Nombre de lignes à générer")
+    p_synth.add_argument("--chaos-rate", type=float, default=0.0, help="Taux de chaos (0.0 à 1.0)")
+    p_synth.add_argument(
+        "--chaos-modes",
+        required=False,
+        help="Modes séparés par virgule (nulls, outliers, negatives, duplicates, schema_drift)",
+    )
+    p_synth.add_argument("--seed", type=int, default=42, help="Graine aléatoire")
+    p_synth.add_argument("--output", required=False, help="Chemin CSV de sortie")
+    p_synth.add_argument(
+        "--run-audit", action="store_true", help="Lance immédiatement l'audit qualité"
+    )
 
     p_pscan = sub.add_parser("pii-scan", help="Détecte les données personnelles (PII/RGPD)")
     p_pscan.add_argument("--file", required=True, help="Fichier à analyser")
@@ -1098,6 +1160,16 @@ def main(argv: list[str] | None = None) -> int:
                 json_logs=args.json_logs,
                 chunk_size=args.chunk_size,
                 quarantine=args.quarantine,
+            )
+        if args.command == "synth":
+            return synth_cmd(
+                domain=args.domain,
+                rows=args.rows,
+                chaos_rate=args.chaos_rate,
+                chaos_modes=args.chaos_modes,
+                seed=args.seed,
+                output_path=args.output,
+                run_audit=args.run_audit,
             )
         if args.command == "pii-scan":
             return pii_scan_cmd(file_path=args.file)

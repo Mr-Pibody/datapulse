@@ -102,7 +102,7 @@ def test_api_pii_endpoints_rbac_and_v15_dashboard(tmp_path: Path) -> None:
     # Dashboard v15 multi-onglets
     dash = client.get("/")
     assert dash.status_code == 200
-    assert "v15.0.0" in dash.text
+    assert "DataPulse Observatoire" in dash.text
     assert "Gouvernance PII &amp; RGPD" in dash.text
 
     # Scan autorisé pour viewer
