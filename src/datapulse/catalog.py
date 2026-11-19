@@ -387,6 +387,11 @@ def sync_catalog_from_configs(
         except Exception:
             pass
 
+    pii_keywords = (
+        "email", "mail", "tel", "phone", "mobile", "iban", "bic", "carte",
+        "card", "nir", "ssn", "nom", "prenom", "adresse", "address", "ip",
+        "passport", "naissance", "birth", "salaire", "salary",
+    )
     synced_domains: list[str] = []
     for domain, spec in sorted(domain_specs.items()):
         desc = str(spec.get("description") or f"Contrat de donnees {domain}").strip()
@@ -394,6 +399,27 @@ def sync_catalog_from_configs(
         owner = str(spec.get("owner") or "data-engineering@datapulse.local").strip()
         steward = str(spec.get("steward") or "governance@datapulse.local").strip()
         classification = str(spec.get("classification") or "INTERNAL").strip().upper()
+
+        schema_cols: list[dict[str, Any]] = []
+        raw_schema = spec.get("schema")
+        if isinstance(raw_schema, dict):
+            for col_name, col_meta in raw_schema.items():
+                meta = col_meta if isinstance(col_meta, dict) else {"type": str(col_meta)}
+                cname = str(col_name)
+                low = cname.lower()
+                is_pii = bool(meta.get("pii")) or any(k in low for k in pii_keywords)
+                pii_type = str(meta.get("pii_type") or ("SENSITIVE_FIELD" if is_pii else ""))
+                schema_cols.append({
+                    "name": cname,
+                    "dtype": str(meta.get("type", "string")),
+                    "required": bool(meta.get("required", False)),
+                    "is_pii": is_pii,
+                    "pii_type": pii_type,
+                })
+
+        if any(c["is_pii"] for c in schema_cols) and classification == "INTERNAL":
+            classification = "CONFIDENTIAL"
+
         register_asset(
             db_path,
             domain=domain,
@@ -403,6 +429,8 @@ def sync_catalog_from_configs(
             classification=classification,
             description=desc,
             sla_max_age_hours=sla_hours,
+            schema_columns=schema_cols,
+            source_uri=f"configs/{domain}.yaml",
         )
         synced_domains.append(domain)
 

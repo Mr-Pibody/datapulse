@@ -10,7 +10,8 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from datapulse.alerts import list_alert_history, send_test_alert
@@ -43,6 +44,7 @@ from datapulse.security import (
     authenticate_api_key,
     bootstrap_env_api_key,
     create_api_key,
+    ensure_security_tables,
     extract_bearer_or_api_key,
     has_active_api_keys,
     list_api_keys,
@@ -118,7 +120,7 @@ def create_app(
     """Construit l'instance FastAPI configurée avec contrôle d'accès RBAC."""
     app = FastAPI(
         title="DataPulse API",
-        version="17.0.0",
+        version="18.0.0",
         description="API REST Zero-Trust de gouvernance, RGPD/PII, Synthèse Chaos et Lineage.",
     )
 
@@ -637,7 +639,155 @@ def create_app(
     ) -> dict[str, Any]:
         return search_catalog(db_path, q)
 
+
+    # ==================== ENDPOINTS v18.0 (ZERO TERMINAL) ====================
+    static_dir = Path(__file__).resolve().parent / "static"
+    if static_dir.exists():
+        app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
+    @app.post("/api/demo/bootstrap")
+    def demo_bootstrap_session() -> dict[str, Any]:
+        """Genere et active une cle admin pour la session Web sans passer par la CLI."""
+        ensure_security_tables(db_path)
+        key_info = create_api_key(db_path, name="web-demo-admin", role="admin")
+        try:
+            sync_catalog_from_configs(db_path, config_dir=configs_dir)
+            if not list_glossary_terms(db_path):
+                upsert_glossary_term(
+                    db_path,
+                    term="Taux de Conformité Qualité",
+                    definition=(
+                        "Pourcentage de lignes valides respectant l'ensemble des règles."
+                    ),
+                    domain="global",
+                    formula="(total_rows - quarantined_rows) / total_rows * 100",
+                )
+        except Exception:
+            pass
+        return {
+            "api_key": key_info["api_key"],
+            "key_id": key_info["key_id"],
+            "role": key_info["role"],
+            "name": key_info["name"],
+        }
+
+    @app.get("/api/demo/datasets", dependencies=[Depends(_require_role("viewer"))])
+    def list_demo_datasets() -> dict[str, Any]:
+        """Liste les jeux de donnees reels disponibles dans data/raw pour audit en 1 clic."""
+        raw_dir = Path("data/raw")
+        curated = [
+            ("ventes.csv", "commerce", "Ventes E-Commerce réelles (avec anomalies prix/doublons)"),
+            ("transactions.csv", "finance", "Transactions financières (montants & devises)"),
+            ("clients_pii_test.csv", "auto", "Fichier Clients RGPD (Emails, Téléphones, IBAN)"),
+            ("services_publics.csv", "administration", "Indicateurs Services Publics"),
+            ("diamonds.csv", "diamonds", "Catalogue Diamants haute volumétrie"),
+        ]
+        datasets: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for fname, dom, label in curated:
+            fpath = raw_dir / fname
+            if fpath.exists():
+                seen.add(fname)
+                datasets.append({
+                    "filename": fname,
+                    "suggested_domain": dom,
+                    "label": label,
+                    "size_kb": round(fpath.stat().st_size / 1024, 1),
+                })
+        if raw_dir.exists():
+            for p in sorted(raw_dir.glob("*.csv")):
+                if p.name not in seen and "_annotated" not in p.name and "_clean" not in p.name:
+                    datasets.append({
+                        "filename": p.name,
+                        "suggested_domain": "auto",
+                        "label": f"Dataset CSV ({p.name})",
+                        "size_kb": round(p.stat().st_size / 1024, 1),
+                    })
+        return {"count": len(datasets), "datasets": datasets}
+
+    @app.post("/api/demo/run-dataset", dependencies=[Depends(_require_role("operator"))])
+    def run_demo_dataset(payload: dict[str, Any]) -> dict[str, Any]:
+        """Execute le pipeline complet directement sur un fichier de data/raw."""
+        filename = Path(str(payload.get("filename", ""))).name
+        domain = str(payload.get("domain", "auto"))
+        quarantine_flag = bool(payload.get("quarantine", True))
+        target = Path("data/raw") / filename
+        if not filename or not target.exists():
+            raise HTTPException(status_code=404, detail=f"Dataset introuvable : {filename}")
+        try:
+            exit_code = run_pipeline(
+                file_path=str(target),
+                domain=domain,
+                db_path=db_path,
+                reports_dir=reports_dir,
+                processed_dir=processed_dir,
+                configs_dir=configs_dir,
+                quarantine=quarantine_flag,
+            )
+        except (DataPulseError, ConfigError, FileNotFoundError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        lookup_domain = None if domain.strip().lower() == "auto" else domain
+        latest = _storage().get_history(domain=lookup_domain, limit=1)
+        return {"exit_code": exit_code, "run": latest[0] if latest else None}
+
+    @app.get("/api/runs/{run_id}/artifacts/{kind}", dependencies=[Depends(_require_role("viewer"))])
+    def download_run_artifact(run_id: str, kind: str) -> FileResponse:
+        """Telecharge le rapport HTML, le CSV nettoye ou le CSV annote d'une execution."""
+        details = _storage().get_run_details(run_id)
+        if details is None:
+            raise HTTPException(status_code=404, detail=f"Run introuvable : {run_id}")
+        meta = details.get("run", details)
+        full_id = str(meta.get("run_id", run_id))
+        prefix = full_id[:8]
+        dom = str(meta.get("domain", ""))
+
+        if kind == "report":
+            candidates = sorted(Path(reports_dir).glob(f"*{prefix}*.html"))
+            media_type = "text/html"
+        elif kind == "clean":
+            candidates = sorted(Path(processed_dir).glob(f"*{prefix}*_clean.csv"))
+            media_type = "text/csv"
+        elif kind == "annotated":
+            candidates = sorted(Path(processed_dir).glob(f"*{prefix}*_annotated.csv"))
+            media_type = "text/csv"
+        else:
+            raise HTTPException(
+                status_code=400, detail="Type d'artefact invalide (report, clean, annotated)."
+            )
+
+        if not candidates:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Artefact '{kind}' introuvable pour {dom}_{prefix}.",
+            )
+        return FileResponse(
+            path=str(candidates[0]), filename=candidates[0].name, media_type=media_type
+        )
+
+    @app.post("/api/quarantine/resolve", dependencies=[Depends(_require_role("operator"))])
+    def resolve_quarantine_row(payload: dict[str, Any]) -> dict[str, Any]:
+        """Met a jour le statut d'une ligne en quarantaine (APPROVED / REJECTED)."""
+        row_id = int(payload.get("id", 0))
+        new_status = str(payload.get("status", "")).strip().upper()
+        if new_status not in {"APPROVED", "REJECTED", "PENDING"}:
+            raise HTTPException(
+                status_code=400, detail="Statut invalide (APPROVED, REJECTED ou PENDING)."
+            )
+        import sqlite3
+        with sqlite3.connect(db_path) as conn:
+            cur = conn.execute(
+                "UPDATE quarantine SET status = ? WHERE id = ?", (new_status, row_id)
+            )
+            conn.commit()
+            if cur.rowcount == 0:
+                raise HTTPException(
+                    status_code=404, detail=f"Ligne quarantaine #{row_id} introuvable."
+                )
+        return {"id": row_id, "status": new_status}
+
     return app
+
 
 
 app = create_app()
