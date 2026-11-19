@@ -11,7 +11,7 @@
     <div class="brand">
       <div class="brand-logo">DP</div>
       <div>
-        <h1>DataPulse Observatoire <span class="badge-ver">v18.0.0</span></h1>
+        <h1>DataPulse Observatoire <span class="badge-ver">v18.2.0</span></h1>
         <p>Gouvernance Qualité, RGPD/PII, Chaos Engineering, Lineage SHA-256 &amp; Data Catalog</p>
       </div>
     </div>
@@ -230,7 +230,9 @@
               <option value="PENDING">PENDING (À traiter)</option>
               <option value="APPROVED">APPROVED (Validées)</option>
               <option value="REJECTED">REJECTED (Rejetées)</option>
+              <option value="REPLAYED">REPLAYED (Réintégrées)</option>
             </select>
+            <button id="btn-replay-quarantine" class="btn btn-success">🔄 Rejouer les lignes APPROVED</button>
             <button id="btn-load-quarantine" class="btn btn-primary">Actualiser la file</button>
           </div>
         </div>

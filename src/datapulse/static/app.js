@@ -498,6 +498,29 @@
   };
 
   $("btn-load-quarantine").addEventListener("click", loadQuarantine);
+
+  if ($("btn-replay-quarantine")) {
+    $("btn-replay-quarantine").addEventListener("click", async () => {
+      try {
+        const dom = $("quar-domain-filter").value || null;
+        const res = await api("/api/quarantine/replay", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ domain: dom }),
+        });
+        if (!res.replayed_count) {
+          setFeedback("quarantine-feedback", "Aucune ligne APPROVED à rejouer pour le moment.", true);
+        } else {
+          setFeedback("quarantine-feedback", `✅ ${res.replayed_count} ligne(s) réintégrée(s) dans ${res.artifact_path}`);
+          showToast(`🔄 ${res.replayed_count} ligne(s) rejouée(s) !`);
+          await loadQuarantine();
+        }
+      } catch (err) {
+        setFeedback("quarantine-feedback", err.message, true);
+      }
+    });
+  }
+
   $("quar-domain-filter").addEventListener("change", loadQuarantine);
   $("quar-status-filter").addEventListener("change", loadQuarantine);
 

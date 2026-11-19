@@ -423,3 +423,83 @@ class DataPulseStorage:
             },
             "schema_drifts": drifts,
         }
+
+    def update_quarantine_status(self, quarantine_id: int, status: str) -> bool:
+        """Met a jour le statut d'une ligne en quarantaine de maniere transactionnelle."""
+        clean_status = status.strip().upper()
+        if clean_status not in {"PENDING", "APPROVED", "REJECTED", "REPLAYED"}:
+            raise ValueError(f"Statut de quarantaine invalide : {status}")
+        with self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE quarantine_rows SET status = ? WHERE quarantine_id = ?",
+                (clean_status, int(quarantine_id)),
+            )
+            return cur.rowcount > 0
+
+    def replay_approved_rows(
+        self,
+        *,
+        domain: str | None = None,
+        processed_dir: str | Path = "data/processed",
+    ) -> dict[str, Any]:
+        """Rejoue les lignes APPROVED dans un CSV consolide et passe leur statut a REPLAYED."""
+        import csv
+        import json
+
+        with self._connect() as conn:
+            if domain:
+                rows = conn.execute(
+                    "SELECT quarantine_id, run_id, domain, row_payload_json "
+                    "FROM quarantine_rows WHERE status = 'APPROVED' AND domain = ? "
+                    "ORDER BY quarantine_id ASC",
+                    (domain,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT quarantine_id, run_id, domain, row_payload_json "
+                    "FROM quarantine_rows WHERE status = 'APPROVED' "
+                    "ORDER BY quarantine_id ASC"
+                ).fetchall()
+
+            if not rows:
+                return {"replayed_count": 0, "artifact_path": None, "domains": []}
+
+            parsed_records: list[dict[str, Any]] = []
+            q_ids: list[int] = []
+            domains_seen: set[str] = set()
+            for r in rows:
+                q_ids.append(int(r["quarantine_id"]))
+                domains_seen.add(str(r["domain"]))
+                try:
+                    payload = json.loads(str(r["row_payload_json"]))
+                    if isinstance(payload, dict):
+                        parsed_records.append(payload)
+                except Exception:
+                    continue
+
+            out_dir = Path(processed_dir)
+            out_dir.mkdir(parents=True, exist_ok=True)
+            ts_slug = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            dom_slug = domain if domain else "multi"
+            out_file = out_dir / f"{dom_slug}_replayed_{ts_slug}.csv"
+
+            if parsed_records:
+                fieldnames = list(dict.fromkeys(k for rec in parsed_records for k in rec))
+                with open(out_file, "w", encoding="utf-8", newline="") as f:
+                    writer = csv.DictWriter(f, fieldnames=fieldnames)
+                    writer.writeheader()
+                    writer.writerows(parsed_records)
+
+            now_iso = datetime.now(timezone.utc).isoformat()
+            placeholders = ",".join("?" for _ in q_ids)
+            conn.execute(
+                f"UPDATE quarantine_rows SET status = 'REPLAYED', replayed_at = ? "
+                f"WHERE quarantine_id IN ({placeholders})",
+                [now_iso, *q_ids],
+            )
+
+        return {
+            "replayed_count": len(q_ids),
+            "artifact_path": str(out_file) if parsed_records else None,
+            "domains": sorted(domains_seen),
+        }

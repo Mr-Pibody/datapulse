@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
+import os
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -152,11 +154,17 @@ def _extract_seal_payload(record: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _get_signing_secret() -> bytes:
+    """Retourne la cle secrete HMAC-SHA256 du serveur (Zero-Trust)."""
+    secret = os.environ.get("DATAPULSE_SIGNING_SECRET", "datapulse-v18-enterprise-hmac-key")
+    return secret.encode("utf-8")
+
+
 def _compute_seal(record: dict[str, Any]) -> str:
-    """Calcule le sceau cryptographique SHA-256 d'un enregistrement de lineage."""
+    """Calcule le sceau cryptographique HMAC-SHA256 d'un enregistrement de lineage."""
     payload = _extract_seal_payload(record)
-    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hmac.new(_get_signing_secret(), canonical, hashlib.sha256).hexdigest()
 
 
 def record_run_lineage(

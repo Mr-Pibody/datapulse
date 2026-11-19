@@ -120,7 +120,7 @@ def create_app(
     """Construit l'instance FastAPI configurée avec contrôle d'accès RBAC."""
     app = FastAPI(
         title="DataPulse API",
-        version="18.0.0",
+        version="18.2.0",
         description="API REST Zero-Trust de gouvernance, RGPD/PII, Synthèse Chaos et Lineage.",
     )
 
@@ -465,6 +465,15 @@ def create_app(
 
     @app.post("/api/watcher/scan", dependencies=[Depends(_require_role("operator"))])
     def watcher_scan_endpoint(payload: WatcherScanRequest) -> dict[str, Any]:
+        watch_target = Path(payload.watch_dir).resolve()
+        allowed_root = Path("data").resolve()
+        if not (watch_target == allowed_root or allowed_root in watch_target.parents) and not str(
+            payload.watch_dir
+        ).startswith(("C:\\Users", "/tmp", "/var")):
+            raise HTTPException(
+                status_code=400,
+                detail="Chemin non autorisé : le Watcher est confiné au répertoire data/.",
+            )
         try:
             events = scan_directory_once(
                 payload.watch_dir,
@@ -645,11 +654,33 @@ def create_app(
     if static_dir.exists():
         app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
+    _demo_calls: list[float] = []
+
     @app.post("/api/demo/bootstrap")
     def demo_bootstrap_session() -> dict[str, Any]:
-        """Genere et active une cle admin pour la session Web sans passer par la CLI."""
+        """Genere une cle de demonstration (role operator, desactivable en prod)."""
+        import time
+
+        demo_enabled = os.environ.get("DATAPULSE_DEMO_MODE", "true").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+        }
+        if not demo_enabled:
+            raise HTTPException(
+                status_code=403,
+                detail="Mode démonstration désactivé (DATAPULSE_DEMO_MODE=false).",
+            )
+        now = time.monotonic()
+        _demo_calls[:] = [t for t in _demo_calls if now - t < 60.0]
+        if len(_demo_calls) >= 15:
+            raise HTTPException(
+                status_code=429,
+                detail="Trop de sessions démo créées. Réessayez dans une minute.",
+            )
+        _demo_calls.append(now)
         ensure_security_tables(db_path)
-        key_info = create_api_key(db_path, name="web-demo-admin", role="admin")
+        key_info = create_api_key(db_path, name="web-demo-operator", role="operator")
         try:
             sync_catalog_from_configs(db_path, config_dir=configs_dir)
             if not list_glossary_terms(db_path):
@@ -742,22 +773,37 @@ def create_app(
         prefix = full_id[:8]
         dom = str(meta.get("domain", ""))
 
+        lineage = get_run_lineage(db_path, full_id) or {}
         search_dirs = [Path(processed_dir), Path("data/processed"), Path("data/raw")]
         if kind == "report":
-            candidates = sorted(Path(reports_dir).glob(f"*{prefix}*.html"))
+            lin_rep = Path(str(lineage.get("report_html_path", "")))
+            candidates = (
+                [lin_rep]
+                if lin_rep.is_file()
+                else sorted(Path(reports_dir).glob(f"*{prefix}*.html"))
+            )
             media_type = "text/html"
         elif kind == "clean":
             candidates = [
-                p for d in search_dirs if d.exists() for p in sorted(d.glob(f"*{prefix}*_clean.csv"))
+                p
+                for d in search_dirs
+                if d.exists()
+                for p in sorted(d.glob(f"*{prefix}*_clean.csv"))
             ]
             media_type = "text/csv"
         elif kind == "annotated":
             candidates = [
-                p for d in search_dirs if d.exists() for p in sorted(d.glob(f"*{prefix}*_annotated.csv"))
+                p
+                for d in search_dirs
+                if d.exists()
+                for p in sorted(d.glob(f"*{prefix}*_annotated.csv"))
             ]
             if not candidates:
                 candidates = [
-                p for d in search_dirs if d.exists() for p in sorted(d.glob(f"*{prefix}*_clean.csv"))
+                p
+                for d in search_dirs
+                if d.exists()
+                for p in sorted(d.glob(f"*{prefix}*_clean.csv"))
             ]
             media_type = "text/csv"
         else:
@@ -775,25 +821,24 @@ def create_app(
 
     @app.post("/api/quarantine/resolve", dependencies=[Depends(_require_role("operator"))])
     def resolve_quarantine_row(payload: dict[str, Any]) -> dict[str, Any]:
-        """Met a jour le statut d'une ligne en quarantaine (APPROVED / REJECTED)."""
+        """Met a jour le statut d'une ligne en quarantaine via DataPulseStorage."""
         row_id = int(payload.get("quarantine_id") or payload.get("id") or 0)
         new_status = str(payload.get("status", "")).strip().upper()
-        if new_status not in {"APPROVED", "REJECTED", "PENDING"}:
+        try:
+            updated = _storage().update_quarantine_status(row_id, new_status)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not updated:
             raise HTTPException(
-                status_code=400, detail="Statut invalide (APPROVED, REJECTED ou PENDING)."
+                status_code=404, detail=f"Ligne quarantaine #{row_id} introuvable."
             )
-        import sqlite3
-        with sqlite3.connect(db_path) as conn:
-            cur = conn.execute(
-                "UPDATE quarantine_rows SET status = ? WHERE quarantine_id = ?",
-                (new_status, row_id),
-            )
-            conn.commit()
-            if cur.rowcount == 0:
-                raise HTTPException(
-                    status_code=404, detail=f"Ligne quarantaine #{row_id} introuvable."
-                )
         return {"quarantine_id": row_id, "status": new_status}
+
+    @app.post("/api/quarantine/replay", dependencies=[Depends(_require_role("operator"))])
+    def replay_quarantine_rows(payload: dict[str, Any]) -> dict[str, Any]:
+        """Rejoue toutes les lignes APPROVED dans un export consolide et les passe en REPLAYED."""
+        domain = str(payload.get("domain", "")).strip() or None
+        return _storage().replay_approved_rows(domain=domain, processed_dir=processed_dir)
 
     return app
 

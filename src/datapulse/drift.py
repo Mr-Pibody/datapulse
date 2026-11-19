@@ -100,16 +100,28 @@ def compute_ks_2samp(sample_a: list[float], sample_b: list[float]) -> tuple[floa
     return round(d_stat, 6), round(p_val, 6)
 
 
+def compute_wasserstein_1d(sample_a: list[float], sample_b: list[float]) -> float:
+    """Calcule la distance de Wasserstein-1 (Earth Mover's Distance) normalisee."""
+    a = np.sort(np.asarray(sample_a, dtype=np.float64))
+    b = np.sort(np.asarray(sample_b, dtype=np.float64))
+    if a.size == 0 or b.size == 0:
+        return 0.0
+    grid = np.linspace(0.0, 1.0, 101)
+    qa = np.quantile(a, grid)
+    qb = np.quantile(b, grid)
+    scale = max(float(np.std(a)), 1e-9)
+    return round(float(np.mean(np.abs(qa - qb))) / scale, 6)
+
+
 def _psi_and_jsd_from_probs(
     p_raw: np.ndarray[Any, np.dtype[np.float64]],
     q_raw: np.ndarray[Any, np.dtype[np.float64]],
 ) -> tuple[float, float]:
-    """Calcule le PSI et la divergence de Jensen-Shannon entre deux vecteurs de probabilités."""
-    eps = 1e-6
-    p = np.maximum(p_raw, eps)
-    q = np.maximum(q_raw, eps)
-    p = p / float(np.sum(p))
-    q = q / float(np.sum(q))
+    """Calcule le PSI (lissage de Laplace) et la divergence de Jensen-Shannon."""
+    k_bins = max(int(p_raw.size), 1)
+    alpha = 0.5 / float(k_bins)
+    p = (np.maximum(p_raw, 0.0) + alpha) / (float(np.sum(np.maximum(p_raw, 0.0))) + 0.5)
+    q = (np.maximum(q_raw, 0.0) + alpha) / (float(np.sum(np.maximum(q_raw, 0.0))) + 0.5)
 
     psi = float(np.sum((q - p) * np.log(q / p)))
     m = 0.5 * (p + q)
