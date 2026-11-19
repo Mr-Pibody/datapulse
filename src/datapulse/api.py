@@ -1,4 +1,4 @@
-"""API REST FastAPI et endpoints d'observabilité DataPulse V11."""
+"""API REST FastAPI et endpoints d'observabilité DataPulse V12."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from pydantic import BaseModel
 
 from datapulse.alerts import list_alert_history, send_test_alert
@@ -18,6 +18,11 @@ from datapulse.dashboard import render_dashboard_html
 from datapulse.drift import detect_data_drift, load_run_column_profiles
 from datapulse.exceptions import DataPulseError, StorageTransactionError
 from datapulse.lineage import build_audit_certificate, get_run_lineage, verify_audit_certificate
+from datapulse.prometheus_metrics import (
+    check_liveness,
+    check_readiness,
+    render_prometheus_metrics,
+)
 from datapulse.schema_inference import list_available_domains
 from datapulse.sql_connector import list_sql_tables
 from datapulse.storage import DataPulseStorage
@@ -64,8 +69,8 @@ def create_app(
     """Construit l'instance FastAPI configurée pour une base SQLite donnée."""
     app = FastAPI(
         title="DataPulse API",
-        version="11.0.0",
-        description="API REST de gouvernance, Score Qualité, Data Lineage et observabilité.",
+        version="12.0.0",
+        description="API REST de gouvernance, Data Lineage, Prometheus et observabilité.",
     )
 
     def _storage() -> DataPulseStorage:
@@ -80,9 +85,26 @@ def create_app(
         storage = _storage()
         return {
             "status": "ok",
-            "version": "11.0.0",
+            "version": "12.0.0",
             "db_path": str(storage.db_path),
         }
+
+    @app.get("/health/live")
+    def liveness_probe() -> dict[str, Any]:
+        return check_liveness()
+
+    @app.get("/health/ready")
+    def readiness_probe() -> JSONResponse:
+        ready, payload = check_readiness(db_path=db_path)
+        return JSONResponse(status_code=200 if ready else 503, content=payload)
+
+    @app.get("/metrics", response_class=PlainTextResponse)
+    def prometheus_metrics() -> PlainTextResponse:
+        body = render_prometheus_metrics(db_path=db_path)
+        return PlainTextResponse(
+            content=body,
+            media_type="text/plain; version=0.0.4; charset=utf-8",
+        )
 
     @app.get("/api/domains")
     def get_domains() -> dict[str, Any]:

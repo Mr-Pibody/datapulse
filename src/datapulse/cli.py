@@ -1,4 +1,4 @@
-"""Interface en ligne de commande DataPulse V11."""
+"""Interface en ligne de commande DataPulse V12."""
 
 from __future__ import annotations
 
@@ -33,6 +33,7 @@ from datapulse.lineage import (
 from datapulse.models import RunMeta
 from datapulse.observability import PipelineTracker, get_structured_logger
 from datapulse.profiler import StreamingProfiler, detect_schema_drift, profile_dataframe
+from datapulse.prometheus_metrics import collect_observability_snapshot, render_prometheus_metrics
 from datapulse.quarantine import (
     export_quarantine_to_csv,
     partition_clean_and_quarantine,
@@ -143,7 +144,7 @@ def _finalize_and_report(
         domain=resolved_domain,
         source_file=source_label,
         file_hash_sha256=file_hash,
-        config_version=str(config.get("version", "11.0")),
+        config_version=str(config.get("version", "12.0")),
         row_count=row_count,
         duration_ms=telemetry.total_duration_ms,
         peak_memory_kb=peak_memory_kb,
@@ -192,7 +193,7 @@ def _finalize_and_report(
         config=config,
     )
 
-    print(f"\n=== DataPulse V11 | Run {run_id[:8]} ({resolved_domain} | {mode_label}) ===")
+    print(f"\n=== DataPulse V12 | Run {run_id[:8]} ({resolved_domain} | {mode_label}) ===")
     print(f"Source      : {source_label} ({row_count} lignes)")
     print(
         f"Score Qual. : {quality_info['score']}/100 (Grade {quality_info['grade']}) | "
@@ -590,6 +591,27 @@ def audit_cert_cmd(
     return int(ExitCode.SUCCESS)
 
 
+def metrics_cmd(
+    *,
+    fmt: str = "prometheus",
+    output_path: str | None = None,
+    db_path: str = "db/datapulse.sqlite",
+) -> int:
+    if fmt == "json":
+        payload = json.dumps(collect_observability_snapshot(db_path), indent=2, ensure_ascii=False)
+    else:
+        payload = render_prometheus_metrics(db_path)
+
+    if output_path:
+        dest = Path(output_path)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(payload, encoding="utf-8")
+        print(f"Métriques exportées vers : {dest}")
+    else:
+        print(payload)
+    return int(ExitCode.SUCCESS)
+
+
 def diff_runs(
     run_a: str | None = None,
     run_b: str | None = None,
@@ -713,7 +735,7 @@ def alerts_test_cmd(
         print("Aucun canal configuré (--webhook-url, --slack-url, --discord-url ou env).")
         return int(ExitCode.EXECUTION_ERROR)
 
-    print("\n=== Test des notifications DataPulse V11 ===")
+    print("\n=== Test des notifications DataPulse V12 ===")
     has_failure = False
     for r in results:
         print(f"  - {r['channel']:<10} : {r['status']} ({r['detail']})")
@@ -757,7 +779,7 @@ def watch_cmd(
     db_path: str = "db/datapulse.sqlite",
 ) -> int:
     target = config_path or watch_dir or ""
-    print(f"\n=== Orchestrateur DataPulse V11 démarré ({target}) ===")
+    print(f"\n=== Orchestrateur DataPulse V12 démarré ({target}) ===")
     summary = watch_loop(
         watch_dir=watch_dir,
         config_path=config_path,
@@ -779,7 +801,7 @@ def watch_cmd(
 
 def show_watch_status(db_path: str = "db/datapulse.sqlite", limit: int = 20) -> int:
     status = get_watcher_status(db_path=db_path, limit=limit)
-    print("\n=== État de l'Orchestrateur DataPulse V11 ===")
+    print("\n=== État de l'Orchestrateur DataPulse V12 ===")
     print(f"Fichiers suivis : {status['files_count']} | Tâches planifiées : {status['jobs_count']}")
     for f in status["recent_files"]:
         print(
@@ -819,7 +841,7 @@ def serve_api(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="datapulse",
-        description="DataPulse V11 — Observatoire générique de qualité, lineage et gouvernance",
+        description="DataPulse V12 — Observatoire générique de qualité, lineage et télémétrie",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -861,6 +883,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_cert.add_argument("--run-id", required=False, help="ID du run à certifier")
     p_cert.add_argument("--output", required=False, help="Chemin du fichier JSON de sortie")
     p_cert.add_argument("--verify", required=False, help="Chemin d'un certificat JSON à vérifier")
+
+    p_met = sub.add_parser("metrics", help="Affiche ou exporte les métriques Prometheus")
+    p_met.add_argument(
+        "--format",
+        default="prometheus",
+        choices=["prometheus", "json"],
+        help="Format de sortie (prometheus ou json)",
+    )
+    p_met.add_argument("--output", required=False, help="Fichier de sortie optionnel")
 
     p_diff = sub.add_parser("diff", help="Compare deux exécutions (Schema & Data Drift)")
     p_diff.add_argument("--run-a", required=False, help="ID du run de référence (base)")
@@ -954,6 +985,8 @@ def main(argv: list[str] | None = None) -> int:
                 output_path=args.output,
                 verify_file=args.verify,
             )
+        if args.command == "metrics":
+            return metrics_cmd(fmt=args.format, output_path=args.output)
         if args.command == "diff":
             return diff_runs(run_a=args.run_a, run_b=args.run_b, domain=args.domain)
         if args.command == "quarantine":

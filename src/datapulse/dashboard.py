@@ -1,4 +1,4 @@
-"""Dashboard web autonome pour l'observatoire DataPulse V11."""
+"""Dashboard web autonome pour l'observatoire DataPulse V12."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ def render_dashboard_html() -> str:
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>DataPulse V11 — Observatoire Qualité, Lineage, Drift &amp; Gouvernance</title>
+  <title>DataPulse V12 — Observatoire Qualité, Lineage, Prometheus &amp; Gouvernance</title>
   <style>
     :root {
       --bg: #0b1120;
@@ -113,12 +113,13 @@ def render_dashboard_html() -> str:
       <div>
         <h1>DataPulse</h1>
         <p style="color: var(--muted); font-size: 0.9rem;">
-          Observatoire autonome de qualité, Data Lineage, Drift, SQL et alertes
+          Observatoire autonome de qualité, Data Lineage, Prometheus et gouvernance
         </p>
       </div>
-      <div style="display: flex; gap: 0.75rem; align-items: center;">
+      <div style="display: flex; gap: 0.9rem; align-items: center;">
+        <a href="/metrics" style="color: var(--ok); text-decoration: none;">Prometheus /metrics</a>
         <a href="/docs" style="color: var(--accent); text-decoration: none;">OpenAPI /docs</a>
-        <span class="badge">v11.0.0</span>
+        <span class="badge">v12.0.0</span>
       </div>
     </header>
 
