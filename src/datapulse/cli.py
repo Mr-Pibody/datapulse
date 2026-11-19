@@ -1,8 +1,9 @@
-"""Interface en ligne de commande DataPulse V10."""
+"""Interface en ligne de commande DataPulse V11."""
 
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import tracemalloc
 from pathlib import Path
@@ -22,6 +23,13 @@ from datapulse.drift import (
 )
 from datapulse.exceptions import DataPulseError, ExitCode
 from datapulse.ingestion import ingest_file, iter_file_chunks
+from datapulse.lineage import (
+    compute_quality_score,
+    export_audit_certificate,
+    get_run_lineage,
+    record_run_lineage,
+    verify_audit_certificate,
+)
 from datapulse.models import RunMeta
 from datapulse.observability import PipelineTracker, get_structured_logger
 from datapulse.profiler import StreamingProfiler, detect_schema_drift, profile_dataframe
@@ -64,7 +72,7 @@ def _finalize_and_report(
     quarantine: bool,
     mode_label: str,
 ) -> int:
-    """Exécute détection statistique, drift, persistance, rapports et notifications."""
+    """Exécute détection statistique, drift, lineage, persistance, rapports et alertes."""
     run_id = tracker.telemetry.run_id
     timestamp = tracker.telemetry.started_at
 
@@ -115,6 +123,14 @@ def _finalize_and_report(
         with tracker.track_step("benchmark", rows_in=row_count):
             benchmark_metrics = evaluate_against_reference(df, ref_path, findings, resolved_domain)
 
+    quality_info = compute_quality_score(
+        row_count=row_count,
+        completeness_pct=float(profile.get("completeness_pct", 100.0)),
+        findings=findings,
+        schema_drifts=schema_drifts,
+        data_drifts=data_drifts,
+    )
+
     telemetry = tracker.finalize()
     _, peak_bytes = tracemalloc.get_traced_memory()
     peak_memory_kb = round(peak_bytes / 1024, 2)
@@ -127,7 +143,7 @@ def _finalize_and_report(
         domain=resolved_domain,
         source_file=source_label,
         file_hash_sha256=file_hash,
-        config_version=str(config.get("version", "10.0")),
+        config_version=str(config.get("version", "11.0")),
         row_count=row_count,
         duration_ms=telemetry.total_duration_ms,
         peak_memory_kb=peak_memory_kb,
@@ -143,15 +159,6 @@ def _finalize_and_report(
     if benchmark_metrics:
         storage.save_benchmark(run_id, benchmark_metrics)
 
-    alert_results = dispatch_run_alerts(
-        db_path=storage.db_path,
-        run_meta=run_meta,
-        findings=findings,
-        schema_drifts=schema_drifts,
-        data_drifts=data_drifts,
-        config=config,
-    )
-
     artifacts = generate_reports(
         run_meta=run_meta,
         profile=profile,
@@ -162,9 +169,35 @@ def _finalize_and_report(
         reports_dir=reports_dir,
     )
 
-    print(f"\n=== DataPulse V10 | Run {run_id[:8]} ({resolved_domain} | {mode_label}) ===")
+    lineage_record = record_run_lineage(
+        db_path=storage.db_path,
+        run_id=run_id,
+        domain=resolved_domain,
+        source_uri=source_label,
+        source_sha256=file_hash,
+        config=config,
+        quality_info=quality_info,
+        input_rows=row_count,
+        quarantined_rows=len(quarantined_records),
+        clean_artifact_path=str(clean_file) if clean_file else "",
+        report_html_path=str(artifacts.get("html", "")),
+    )
+
+    alert_results = dispatch_run_alerts(
+        db_path=storage.db_path,
+        run_meta=run_meta,
+        findings=findings,
+        schema_drifts=schema_drifts,
+        data_drifts=data_drifts,
+        config=config,
+    )
+
+    print(f"\n=== DataPulse V11 | Run {run_id[:8]} ({resolved_domain} | {mode_label}) ===")
     print(f"Source      : {source_label} ({row_count} lignes)")
-    print(f"Complétude  : {profile['completeness_pct']}%")
+    print(
+        f"Score Qual. : {quality_info['score']}/100 (Grade {quality_info['grade']}) | "
+        f"Complétude : {profile['completeness_pct']}%"
+    )
     print(
         f"Incidents   : {len(findings)} uniques | "
         f"Schema drift : {len(schema_drifts)} | Data drift : {len(data_drifts)} | "
@@ -178,7 +211,10 @@ def _finalize_and_report(
     if alert_results:
         summary_alerts = ", ".join(f"{a['channel']}={a['status']}" for a in alert_results)
         print(f"Alertes     : {summary_alerts}")
-    print(f"Performance : {telemetry.total_duration_ms} ms | Mémoire max : {peak_memory_kb} Ko")
+    print(
+        f"Lineage SHA : {str(lineage_record['certificate_sha256'])[:16]}... | "
+        f"Performance : {telemetry.total_duration_ms} ms ({peak_memory_kb} Ko)"
+    )
     if benchmark_metrics:
         print(
             f"Benchmark   : Précision={benchmark_metrics['precision'] * 100:.1f}% | "
@@ -494,6 +530,66 @@ def inspect_run(run_id: str, db_path: str = "db/datapulse.sqlite") -> int:
     return int(ExitCode.SUCCESS)
 
 
+def show_lineage_cmd(run_id: str, db_path: str = "db/datapulse.sqlite") -> int:
+    lineage = get_run_lineage(db_path, run_id)
+    if lineage is None:
+        print(f"Aucun lineage trouvé pour le run '{run_id}'.", file=sys.stderr)
+        return int(ExitCode.EXECUTION_ERROR)
+
+    bd = lineage["score_breakdown"]
+    print(f"\n=== Data Lineage & Score Qualité | Run {str(lineage['run_id'])[:8]} ===")
+    print(f"Domaine        : {lineage['domain']} (Contrat v{lineage['contract_version']})")
+    print(f"Score Qualité  : {lineage['quality_score']}/100 (Grade {lineage['quality_grade']})")
+    print(
+        f"Détail Score   : Complétude={bd['completeness']}% | Validité={bd['validity']}% | "
+        f"Drift={bd['statistical_stability']}% | Schéma={bd['schema_stability']}%"
+    )
+    print(
+        f"Source         : {lineage['source_uri']} (SHA256={str(lineage['source_sha256'])[:16]}...)"
+    )
+    print(f"Contrat SHA256 : {str(lineage['contract_sha256'])[:16]}...")
+    print(
+        f"Flux Lignes    : {lineage['input_rows']} entrantes -> "
+        f"{lineage['clean_rows']} saines + {lineage['quarantined_rows']} en quarantaine"
+    )
+    print(f"Sceau Audit    : {lineage['certificate_sha256']}\n")
+    return int(ExitCode.SUCCESS)
+
+
+def audit_cert_cmd(
+    *,
+    run_id: str | None = None,
+    output_path: str | None = None,
+    verify_file: str | None = None,
+    db_path: str = "db/datapulse.sqlite",
+) -> int:
+    if verify_file:
+        cert_path = Path(verify_file)
+        if not cert_path.exists():
+            print(f"Certificat introuvable : '{verify_file}'", file=sys.stderr)
+            return int(ExitCode.EXECUTION_ERROR)
+        cert_payload = json.loads(cert_path.read_text(encoding="utf-8"))
+        check = verify_audit_certificate(cert_payload)
+        state = (
+            "VALIDE (Intégrité vérifiée)" if check["valid"] else "INVALIDE (Altération détectée)"
+        )
+        print("\n=== Vérification Certificat d'Audit DataPulse ===")
+        print(f"Statut         : {state}")
+        print(f"Run ID         : {check['run_id']}")
+        print(f"Score / Grade  : {check['quality_score']}/100 (Grade {check['quality_grade']})\n")
+        return int(ExitCode.SUCCESS) if check["valid"] else int(ExitCode.QUALITY_ALERT)
+
+    if not run_id:
+        print(
+            "Précisez --run-id pour générer un certificat, ou --verify <fichier>.", file=sys.stderr
+        )
+        return int(ExitCode.EXECUTION_ERROR)
+
+    out_file = export_audit_certificate(db_path=db_path, run_id=run_id, output_path=output_path)
+    print(f"\n=== Certificat d'audit signé généré : {out_file} ===\n")
+    return int(ExitCode.SUCCESS)
+
+
 def diff_runs(
     run_a: str | None = None,
     run_b: str | None = None,
@@ -617,7 +713,7 @@ def alerts_test_cmd(
         print("Aucun canal configuré (--webhook-url, --slack-url, --discord-url ou env).")
         return int(ExitCode.EXECUTION_ERROR)
 
-    print("\n=== Test des notifications DataPulse V10 ===")
+    print("\n=== Test des notifications DataPulse V11 ===")
     has_failure = False
     for r in results:
         print(f"  - {r['channel']:<10} : {r['status']} ({r['detail']})")
@@ -661,7 +757,7 @@ def watch_cmd(
     db_path: str = "db/datapulse.sqlite",
 ) -> int:
     target = config_path or watch_dir or ""
-    print(f"\n=== Orchestrateur DataPulse V10 démarré ({target}) ===")
+    print(f"\n=== Orchestrateur DataPulse V11 démarré ({target}) ===")
     summary = watch_loop(
         watch_dir=watch_dir,
         config_path=config_path,
@@ -683,7 +779,7 @@ def watch_cmd(
 
 def show_watch_status(db_path: str = "db/datapulse.sqlite", limit: int = 20) -> int:
     status = get_watcher_status(db_path=db_path, limit=limit)
-    print("\n=== État de l'Orchestrateur DataPulse V10 ===")
+    print("\n=== État de l'Orchestrateur DataPulse V11 ===")
     print(f"Fichiers suivis : {status['files_count']} | Tâches planifiées : {status['jobs_count']}")
     for f in status["recent_files"]:
         print(
@@ -723,47 +819,22 @@ def serve_api(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="datapulse",
-        description="DataPulse V10 — Observatoire générique de qualité et d'anomalies de données",
+        description="DataPulse V11 — Observatoire générique de qualité, lineage et gouvernance",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_run = sub.add_parser("run-all", help="Exécute le pipeline complet sur un fichier")
     p_run.add_argument("--file", required=True, help="Chemin vers CSV/Excel/JSON/JSONL/Parquet")
-    p_run.add_argument(
-        "--domain",
-        required=True,
-        help="Nom du domaine (commerce, finance, administration, diamonds, ou 'auto')",
-    )
-    p_run.add_argument(
-        "--ref", required=False, help="Fichier propre de référence pour le benchmark"
-    )
-    p_run.add_argument(
-        "--strict",
-        action="store_true",
-        help="Retourne le code de sortie 1 si au moins un incident ou drift est détecté",
-    )
-    p_run.add_argument(
-        "--json-logs",
-        action="store_true",
-        help="Émet la télémétrie structurée au format JSON sur stderr",
-    )
-    p_run.add_argument(
-        "--chunk-size",
-        type=int,
-        default=None,
-        help="Active l'ingestion en streaming par blocs de N lignes (ex: 50000)",
-    )
-    p_run.add_argument(
-        "--quarantine",
-        action="store_true",
-        help="Isole les lignes rejetées dans SQLite et exporte un fichier *_clean.csv",
-    )
+    p_run.add_argument("--domain", required=True, help="Nom du domaine ou 'auto'")
+    p_run.add_argument("--ref", required=False, help="Fichier propre de référence")
+    p_run.add_argument("--strict", action="store_true", help="Code retour 1 si incident/drift")
+    p_run.add_argument("--json-logs", action="store_true", help="Logs JSON sur stderr")
+    p_run.add_argument("--chunk-size", type=int, default=None, help="Mode streaming par blocs")
+    p_run.add_argument("--quarantine", action="store_true", help="Isole les lignes rejetées")
 
-    p_sql = sub.add_parser("run-sql", help="Audit qualité directement sur une table ou requête SQL")
-    p_sql.add_argument(
-        "--uri", required=True, help="URI de connexion SQL (ex: sqlite:///db/source.sqlite)"
-    )
-    p_sql.add_argument("--table", required=False, help="Nom de la table SQL à analyser")
+    p_sql = sub.add_parser("run-sql", help="Audit qualité directement sur une table/requête SQL")
+    p_sql.add_argument("--uri", required=True, help="URI SQL (ex: sqlite:///db/source.sqlite)")
+    p_sql.add_argument("--table", required=False, help="Nom de la table SQL")
     p_sql.add_argument("--query", required=False, help="Requête SQL SELECT en lecture seule")
     p_sql.add_argument("--domain", default="auto", help="Domaine cible ou 'auto'")
     p_sql.add_argument("--strict", action="store_true", help="Code retour 1 si anomalie")
@@ -771,17 +842,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_sql.add_argument("--chunk-size", type=int, default=None, help="Streaming SQL par blocs")
     p_sql.add_argument("--quarantine", action="store_true", help="Isole les lignes rejetées")
 
-    p_init = sub.add_parser(
-        "init-config", help="Infère et génère un contrat YAML depuis un fichier de données"
-    )
-    p_init.add_argument("--file", required=True, help="Fichier échantillon (CSV/XLSX/JSON/Parquet)")
-    p_init.add_argument("--domain", required=True, help="Nom du nouveau domaine à créer")
-    p_init.add_argument(
-        "--output-dir", default="configs", help="Répertoire de destination (défaut: configs)"
-    )
-    p_init.add_argument(
-        "--force", action="store_true", help="Écrase le contrat YAML s'il existe déjà"
-    )
+    p_init = sub.add_parser("init-config", help="Infère et génère un contrat YAML")
+    p_init.add_argument("--file", required=True, help="Fichier échantillon")
+    p_init.add_argument("--domain", required=True, help="Nom du nouveau domaine")
+    p_init.add_argument("--output-dir", default="configs", help="Répertoire de destination")
+    p_init.add_argument("--force", action="store_true", help="Écrase le contrat existant")
 
     p_hist = sub.add_parser("history", help="Affiche l'historique des analyses SQLite")
     p_hist.add_argument("--domain", required=False, help="Filtrer par domaine")
@@ -789,62 +854,56 @@ def build_parser() -> argparse.ArgumentParser:
     p_insp = sub.add_parser("inspect", help="Affiche la télémétrie détaillée d'un run")
     p_insp.add_argument("--run-id", required=True, help="ID complet ou préfixe (8 caractères)")
 
+    p_lin = sub.add_parser("lineage", help="Affiche le Data Lineage et le Score Qualité d'un run")
+    p_lin.add_argument("--run-id", required=True, help="ID complet ou préfixe")
+
+    p_cert = sub.add_parser("audit-cert", help="Génère ou vérifie un certificat d'audit signé")
+    p_cert.add_argument("--run-id", required=False, help="ID du run à certifier")
+    p_cert.add_argument("--output", required=False, help="Chemin du fichier JSON de sortie")
+    p_cert.add_argument("--verify", required=False, help="Chemin d'un certificat JSON à vérifier")
+
     p_diff = sub.add_parser("diff", help="Compare deux exécutions (Schema & Data Drift)")
     p_diff.add_argument("--run-a", required=False, help="ID du run de référence (base)")
     p_diff.add_argument("--run-b", required=False, help="ID du run cible")
-    p_diff.add_argument(
-        "--domain", required=False, help="Compare automatiquement les 2 derniers runs du domaine"
-    )
+    p_diff.add_argument("--domain", required=False, help="Compare les 2 derniers runs du domaine")
 
     p_quar = sub.add_parser("quarantine", help="Liste ou exporte les lignes en quarantaine")
     p_quar.add_argument("--domain", required=False, help="Filtrer par domaine")
-    p_quar.add_argument(
-        "--status", default="PENDING", choices=["PENDING", "REPLAYED"], help="Statut des lignes"
-    )
-    p_quar.add_argument(
-        "--export", required=False, help="Chemin CSV d'export pour correction manuelle"
-    )
+    p_quar.add_argument("--status", default="PENDING", choices=["PENDING", "REPLAYED"])
+    p_quar.add_argument("--export", required=False, help="Chemin CSV d'export")
 
     p_rep = sub.add_parser("replay", help="Rejoue un fichier corrigé et clôture la quarantaine")
     p_rep.add_argument("--file", required=True, help="Chemin vers le CSV corrigé")
     p_rep.add_argument("--domain", required=True, help="Domaine métier cible")
 
-    p_atest = sub.add_parser("alerts-test", help="Envoie une notification de test (Webhook/Slack)")
-    p_atest.add_argument("--domain", default="test_domain", help="Nom de domaine affiché")
-    p_atest.add_argument("--webhook-url", default="", help="URL Webhook JSON générique")
-    p_atest.add_argument("--slack-url", default="", help="URL Slack Incoming Webhook")
+    p_atest = sub.add_parser("alerts-test", help="Envoie une notification de test")
+    p_atest.add_argument("--domain", default="test_domain", help="Nom de domaine")
+    p_atest.add_argument("--webhook-url", default="", help="URL Webhook JSON")
+    p_atest.add_argument("--slack-url", default="", help="URL Slack Webhook")
     p_atest.add_argument("--discord-url", default="", help="URL Discord Webhook")
-    p_atest.add_argument("--secret", default="", help="Secret HMAC-SHA256 pour signer le JSON")
+    p_atest.add_argument("--secret", default="", help="Secret HMAC-SHA256")
 
-    p_ahist = sub.add_parser("alerts-history", help="Affiche l'historique des alertes envoyées")
+    p_ahist = sub.add_parser("alerts-history", help="Affiche l'historique des alertes")
     p_ahist.add_argument("--domain", required=False, help="Filtrer par domaine")
     p_ahist.add_argument("--limit", type=int, default=20, help="Nombre maximal d'entrées")
 
-    p_watch = sub.add_parser(
-        "watch", help="Surveille un dossier (hot-folder) ou exécute un plan YAML périodique"
-    )
+    p_watch = sub.add_parser("watch", help="Surveille un dossier ou exécute un plan YAML")
     p_watch.add_argument("--dir", required=False, help="Répertoire de dépôt à surveiller")
     p_watch.add_argument("--config", required=False, help="Fichier watch.yaml multi-tâches")
     p_watch.add_argument("--domain", default="auto", help="Domaine cible ou 'auto'")
-    p_watch.add_argument(
-        "--interval", type=float, default=5.0, help="Intervalle de scrutation en secondes"
-    )
-    p_watch.add_argument(
-        "--max-cycles", type=int, default=None, help="Nombre max de cycles (illimité par défaut)"
-    )
-    p_watch.add_argument("--archive-dir", required=False, help="Dossier d'archive après traitement")
+    p_watch.add_argument("--interval", type=float, default=5.0, help="Intervalle en secondes")
+    p_watch.add_argument("--max-cycles", type=int, default=None, help="Nombre max de cycles")
+    p_watch.add_argument("--archive-dir", required=False, help="Dossier d'archive")
     p_watch.add_argument("--strict", action="store_true", help="Active le mode strict")
-    p_watch.add_argument(
-        "--no-quarantine", action="store_true", help="Désactive l'isolation quarantaine"
-    )
+    p_watch.add_argument("--no-quarantine", action="store_true", help="Désactive la quarantaine")
     p_watch.add_argument("--chunk-size", type=int, default=None, help="Mode streaming par blocs")
 
     p_wstat = sub.add_parser("watch-status", help="Affiche l'état du watcher et des tâches")
     p_wstat.add_argument("--limit", type=int, default=20, help="Nombre maximal d'entrées")
 
     p_srv = sub.add_parser("serve", help="Démarre l'API REST et le Dashboard Web DataPulse")
-    p_srv.add_argument("--host", default="127.0.0.1", help="Adresse d'écoute (défaut: 127.0.0.1)")
-    p_srv.add_argument("--port", type=int, default=8000, help="Port HTTP (défaut: 8000)")
+    p_srv.add_argument("--host", default="127.0.0.1", help="Adresse d'écoute")
+    p_srv.add_argument("--port", type=int, default=8000, help="Port HTTP")
     p_srv.add_argument("--db", default="db/datapulse.sqlite", help="Chemin de la base SQLite")
 
     return parser
@@ -887,6 +946,14 @@ def main(argv: list[str] | None = None) -> int:
             return show_history(domain=args.domain)
         if args.command == "inspect":
             return inspect_run(run_id=args.run_id)
+        if args.command == "lineage":
+            return show_lineage_cmd(run_id=args.run_id)
+        if args.command == "audit-cert":
+            return audit_cert_cmd(
+                run_id=args.run_id,
+                output_path=args.output,
+                verify_file=args.verify,
+            )
         if args.command == "diff":
             return diff_runs(run_a=args.run_a, run_b=args.run_b, domain=args.domain)
         if args.command == "quarantine":

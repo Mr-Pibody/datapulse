@@ -1,4 +1,4 @@
-"""API REST FastAPI et endpoints d'observabilité DataPulse V10."""
+"""API REST FastAPI et endpoints d'observabilité DataPulse V11."""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from datapulse.config_loader import ConfigError
 from datapulse.dashboard import render_dashboard_html
 from datapulse.drift import detect_data_drift, load_run_column_profiles
 from datapulse.exceptions import DataPulseError, StorageTransactionError
+from datapulse.lineage import build_audit_certificate, get_run_lineage, verify_audit_certificate
 from datapulse.schema_inference import list_available_domains
 from datapulse.sql_connector import list_sql_tables
 from datapulse.storage import DataPulseStorage
@@ -63,8 +64,8 @@ def create_app(
     """Construit l'instance FastAPI configurée pour une base SQLite donnée."""
     app = FastAPI(
         title="DataPulse API",
-        version="10.0.0",
-        description="API REST d'orchestration, qualité, Data Drift et alertes temps réel.",
+        version="11.0.0",
+        description="API REST de gouvernance, Score Qualité, Data Lineage et observabilité.",
     )
 
     def _storage() -> DataPulseStorage:
@@ -79,7 +80,7 @@ def create_app(
         storage = _storage()
         return {
             "status": "ok",
-            "version": "10.0.0",
+            "version": "11.0.0",
             "db_path": str(storage.db_path),
         }
 
@@ -117,6 +118,24 @@ def create_app(
         if details is None:
             raise HTTPException(status_code=404, detail=f"Run introuvable : {run_id}")
         return details
+
+    @app.get("/api/runs/{run_id}/lineage")
+    def get_run_lineage_endpoint(run_id: str) -> dict[str, Any]:
+        lineage = get_run_lineage(db_path, run_id)
+        if lineage is None:
+            raise HTTPException(status_code=404, detail=f"Lineage introuvable : {run_id}")
+        return lineage
+
+    @app.get("/api/runs/{run_id}/certificate")
+    def get_run_certificate_endpoint(run_id: str) -> dict[str, Any]:
+        cert = build_audit_certificate(db_path, run_id)
+        if cert is None:
+            raise HTTPException(status_code=404, detail=f"Certificat introuvable : {run_id}")
+        return cert
+
+    @app.post("/api/certificates/verify")
+    def verify_certificate_endpoint(certificate: dict[str, Any]) -> dict[str, Any]:
+        return verify_audit_certificate(certificate)
 
     @app.get("/api/diff")
     def compare_runs_endpoint(

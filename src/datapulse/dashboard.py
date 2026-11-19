@@ -1,4 +1,4 @@
-"""Dashboard web autonome pour l'observatoire DataPulse V10."""
+"""Dashboard web autonome pour l'observatoire DataPulse V11."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ def render_dashboard_html() -> str:
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>DataPulse V10 — Observatoire Qualité, SQL, Drift, Alertes &amp; Watch</title>
+  <title>DataPulse V11 — Observatoire Qualité, Lineage, Drift &amp; Gouvernance</title>
   <style>
     :root {
       --bg: #0b1120;
@@ -52,7 +52,7 @@ def render_dashboard_html() -> str:
     }
     .grid-kpi {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
       gap: 1rem;
       margin-bottom: 2rem;
     }
@@ -113,16 +113,20 @@ def render_dashboard_html() -> str:
       <div>
         <h1>DataPulse</h1>
         <p style="color: var(--muted); font-size: 0.9rem;">
-          Observatoire autonome de qualité, Data Drift, SQL et alertes temps réel
+          Observatoire autonome de qualité, Data Lineage, Drift, SQL et alertes
         </p>
       </div>
       <div style="display: flex; gap: 0.75rem; align-items: center;">
         <a href="/docs" style="color: var(--accent); text-decoration: none;">OpenAPI /docs</a>
-        <span class="badge">v10.0.0</span>
+        <span class="badge">v11.0.0</span>
       </div>
     </header>
 
     <section class="grid-kpi">
+      <div class="card">
+        <div class="kpi-label">Score Santé (Dernier)</div>
+        <div class="kpi-value" id="kpi-score">-</div>
+      </div>
       <div class="card">
         <div class="kpi-label">Exécutions totales</div>
         <div class="kpi-value" id="kpi-runs">-</div>
@@ -155,6 +159,15 @@ def render_dashboard_html() -> str:
         <button type="submit">Lancer l'analyse</button>
       </form>
       <div id="upload-feedback" class="feedback"></div>
+    </section>
+
+    <section class="panel">
+      <h2>Data Lineage &amp; Certificat d'Audit Cryptographique</h2>
+      <form class="upload-bar" id="lineage-form">
+        <input type="text" id="lineage-run-id" placeholder="Run ID (ex: 1a5c9d82)" required />
+        <button type="submit">Inspecter Lineage &amp; Sceau SHA-256</button>
+      </form>
+      <div id="lineage-feedback" class="feedback"></div>
     </section>
 
     <section class="panel">
@@ -279,6 +292,15 @@ def render_dashboard_html() -> str:
         runs.reduce((acc, r) => acc + (r.findings_count || 0), 0).toLocaleString();
       document.getElementById('kpi-quarantine').textContent = (quarData.items || []).length;
 
+      if (runs.length > 0) {
+        const linRes = await fetch(`/api/runs/${runs[0].run_id}/lineage`);
+        if (linRes.ok) {
+          const lin = await linRes.json();
+          document.getElementById('kpi-score').textContent =
+            `${lin.quality_score} (${lin.quality_grade})`;
+        }
+      }
+
       const tbody = document.getElementById('runs-tbody');
       tbody.innerHTML = runs.map(r => {
         const cls = r.status === 'SUCCESS' ? 'status-ok' : 'status-alert';
@@ -317,6 +339,25 @@ def render_dashboard_html() -> str:
       } else {
         feedback.style.color = 'var(--err)';
         feedback.textContent = `Erreur : ${data.detail || 'Échec du pipeline'}`;
+      }
+    });
+
+    document.getElementById('lineage-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const feedback = document.getElementById('lineage-feedback');
+      const rid = document.getElementById('lineage-run-id').value.trim();
+      const resp = await fetch(`/api/runs/${encodeURIComponent(rid)}/lineage`);
+      const data = await resp.json();
+      if (resp.ok) {
+        feedback.style.color = 'var(--ok)';
+        feedback.textContent =
+          `Score ${data.quality_score}/100 (Grade ${data.quality_grade}) | ` +
+          `Flux: ${data.input_rows} -> ${data.clean_rows} saines ` +
+          `(${data.quarantined_rows} quar.) | ` +
+          `Sceau SHA256: ${data.certificate_sha256.slice(0, 20)}...`;
+      } else {
+        feedback.style.color = 'var(--err)';
+        feedback.textContent = `Erreur : ${data.detail || 'Lineage introuvable'}`;
       }
     });
 
