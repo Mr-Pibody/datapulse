@@ -77,3 +77,8 @@ pytest --cov=datapulse --cov-report=term-missing
 
 - **Auteur & Architecte :** Nugbognon Elfried ZANNOU (`Mr-Pibody`)
 - **Licence :** Apache License 2.0 — toute réutilisation ou distribution doit conserver la mention de copyright originale (`LICENSE`).
+
+## Documentation Technique
+
+Consultez le guide d'architecture complet dans [docs/TECHNICAL_ARCHITECTURE.md](docs/TECHNICAL_ARCHITECTURE.md).
+
