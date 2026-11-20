@@ -109,7 +109,14 @@
       $("auth-dot").classList.remove("ok");
     }
   }
-  $("btn-apply-key").addEventListener("click", async () => { setKey($("api-key-input").value); await refreshAll(); });
+    $("btn-apply-key").addEventListener("click", async () => { setKey($("api-key-input").value); await refreshAll(); });
+  $("btn-clear-key")?.addEventListener("click", () => {
+    setKey("");
+    $("api-key-input").value = "";
+    $("auth-pill").textContent = "Clé API requise";
+    $("auth-dot").classList.remove("ok");
+    showToast("Session verrouillée (clé effacée)");
+  });
   $("btn-evaluator-session").addEventListener("click", () => activateEvaluatorSession(false));
 
   function buildDonutSVG(segments, centerTop, centerSub) {
@@ -196,7 +203,7 @@
 
       await Promise.all([loadDemoDatasets(), loadCatalogAssets(), loadGlossary(), loadQuarantine(), loadKeysAndAudit()]);
     } catch {
-      if (!autoBootTried) { autoBootTried = true; await activateEvaluatorSession(true); return; }
+      /* Mode Zero-Trust strict : pas de generation automatique de cle */
       $("auth-pill").textContent = "Clé API requise";
       $("auth-dot").classList.remove("ok");
     }
