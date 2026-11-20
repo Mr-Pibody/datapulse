@@ -84,8 +84,8 @@ def test_api_synth_endpoint_rbac_and_v16_dashboard(tmp_path: Path) -> None:
     # Dashboard v16 avec Labo Chaos & Synthèse
     dash = client.get("/")
     assert dash.status_code == 200
-    assert "DataPulse Observatoire" in dash.text
-    assert "Labo Chaos &amp; Synthèse" in dash.text
+    assert "DataPulse" in dash.text and "v19.0.0" in dash.text
+    assert "Chaos Lab" in dash.text
 
     payload = {
         "domain": "commerce",

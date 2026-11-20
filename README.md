@@ -1,4 +1,4 @@
-# DataPulse v18.2.0
+# DataPulse v19.0.0
 
 **DataPulse** est un moteur d'observabilité, de gouvernance et de contrôle qualité des données orienté contrats (*Data Contracts*), conçu pour auditer des flux **fichiers** (CSV, Excel, JSON, JSONL, Parquet) et **bases de données SQL** en mode batch ou streaming à mémoire constante.
 

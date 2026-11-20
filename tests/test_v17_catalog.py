@@ -144,7 +144,7 @@ def test_api_catalog_endpoints_rbac_and_v17_dashboard(tmp_path: Path) -> None:
 
     dash = client.get("/")
     assert dash.status_code == 200
-    assert "DataPulse Observatoire" in dash.text
+    assert "DataPulse" in dash.text and "v19.0.0" in dash.text
     assert "Data Catalog &amp; SLA" in dash.text
 
     # Un viewer ne peut pas synchroniser ni modifier le catalogue

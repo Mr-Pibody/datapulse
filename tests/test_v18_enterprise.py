@@ -136,3 +136,16 @@ def test_v18_hmac_tamper_detection_and_laplace_psi_stability(tmp_path: Path) -> 
     # Tentative de falsification du score
     cert["quality_score"] = 12.5
     assert verify_audit_certificate(cert)["valid"] is False
+
+
+def test_v19_analytics_cockpit_endpoint(tmp_path: Path) -> None:
+    db_file = tmp_path / "cockpit_v19.sqlite"
+    op_key = str(create_api_key(db_file, name="op-cockpit", role="operator")["api_key"])
+    app = create_app(db_path=str(db_file))
+    client = TestClient(app)
+    resp = client.get("/api/analytics/cockpit", headers={"X-API-Key": op_key})
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert "kpis" in payload
+    assert "latest_score" in payload
+    assert "score_series" in payload

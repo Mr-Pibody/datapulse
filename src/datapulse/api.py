@@ -120,7 +120,7 @@ def create_app(
     """Construit l'instance FastAPI configurée avec contrôle d'accès RBAC."""
     app = FastAPI(
         title="DataPulse API",
-        version="18.2.0",
+        version="19.0.0",
         description="API REST Zero-Trust de gouvernance, RGPD/PII, Synthèse Chaos et Lineage.",
     )
 
@@ -466,10 +466,11 @@ def create_app(
     @app.post("/api/watcher/scan", dependencies=[Depends(_require_role("operator"))])
     def watcher_scan_endpoint(payload: WatcherScanRequest) -> dict[str, Any]:
         watch_target = Path(payload.watch_dir).resolve()
-        allowed_root = Path("data").resolve()
-        if not (watch_target == allowed_root or allowed_root in watch_target.parents) and not str(
-            payload.watch_dir
-        ).startswith(("C:\\Users", "/tmp", "/var")):
+        allowed_roots = [Path("data").resolve(), Path(processed_dir).resolve().parent]
+        is_allowed = any(
+            watch_target == root or root in watch_target.parents for root in allowed_roots
+        )
+        if not is_allowed:
             raise HTTPException(
                 status_code=400,
                 detail="Chemin non autorisé : le Watcher est confiné au répertoire data/.",
@@ -839,6 +840,98 @@ def create_app(
         """Rejoue toutes les lignes APPROVED dans un export consolide et les passe en REPLAYED."""
         domain = str(payload.get("domain", "")).strip() or None
         return _storage().replay_approved_rows(domain=domain, processed_dir=processed_dir)
+
+
+    @app.get("/api/analytics/cockpit", dependencies=[Depends(_require_role("viewer"))])
+    def get_analytics_cockpit() -> dict[str, Any]:
+        """Retourne en un seul appel les KPIs, series temporelles et sante des domaines."""
+        import sqlite3
+
+        runs = _storage().get_history(limit=30)
+        total_runs = len(runs)
+        total_rows = sum(int(r.get("row_count") or 0) for r in runs)
+        total_findings = sum(int(r.get("findings_count") or 0) for r in runs)
+        throughputs = [
+            (float(r["row_count"]) / (float(r["duration_ms"]) / 1000.0))
+            for r in runs
+            if float(r.get("duration_ms") or 0) > 0 and int(r.get("row_count") or 0) > 0
+        ]
+        avg_throughput = round(sum(throughputs) / len(throughputs), 1) if throughputs else 0.0
+
+        series: list[dict[str, Any]] = []
+        latest_score: dict[str, Any] = {
+            "score": 100.0,
+            "grade": "A",
+            "breakdown": {
+                "completeness": 100.0,
+                "validity": 100.0,
+                "statistical_stability": 100.0,
+                "schema_stability": 100.0,
+            },
+        }
+        pending_quarantine = 0
+
+        if Path(db_path).exists():
+            with sqlite3.connect(db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                try:
+                    q_row = conn.execute(
+                        "SELECT COUNT(*) AS cnt FROM quarantine_rows WHERE status = 'PENDING'"
+                    ).fetchone()
+                    pending_quarantine = int(q_row["cnt"]) if q_row else 0
+                except sqlite3.Error:
+                    pending_quarantine = 0
+
+                try:
+                    lin_rows = conn.execute(
+                        "SELECT run_id, domain, quality_score, quality_grade, "
+                        "score_breakdown_json, input_rows, clean_rows, created_at "
+                        "FROM run_lineage ORDER BY created_at DESC LIMIT 16"
+                    ).fetchall()
+                    for idx, lr in enumerate(lin_rows):
+                        item = {
+                            "run_id": lr["run_id"],
+                            "domain": lr["domain"],
+                            "quality_score": float(lr["quality_score"]),
+                            "quality_grade": lr["quality_grade"],
+                            "input_rows": int(lr["input_rows"]),
+                            "clean_rows": int(lr["clean_rows"]),
+                            "created_at": lr["created_at"],
+                        }
+                        series.append(item)
+                        if idx == 0:
+                            import json
+
+                            try:
+                                brk = json.loads(str(lr["score_breakdown_json"]))
+                            except Exception:
+                                brk = latest_score["breakdown"]
+                            latest_score = {
+                                "run_id": lr["run_id"],
+                                "domain": lr["domain"],
+                                "score": float(lr["quality_score"]),
+                                "grade": lr["quality_grade"],
+                                "breakdown": brk,
+                            }
+                except sqlite3.Error:
+                    pass
+
+        series.reverse()
+        cat_sum = get_catalog_summary(db_path)
+        return {
+            "kpis": {
+                "total_runs": total_runs,
+                "total_rows": total_rows,
+                "total_findings": total_findings,
+                "pending_quarantine": pending_quarantine,
+                "avg_throughput_rows_sec": avg_throughput,
+                "sla_compliance_pct": cat_sum.get("sla_compliance_pct", 100.0),
+                "total_assets": cat_sum.get("total_assets", 0),
+                "sla_breached": cat_sum.get("sla_breached", 0),
+            },
+            "latest_score": latest_score,
+            "score_series": series,
+        }
 
     return app
 

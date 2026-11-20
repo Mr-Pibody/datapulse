@@ -67,5 +67,5 @@ def test_github_actions_ci_workflow_is_valid_and_complete() -> None:
     assert "pytest --cov=datapulse" in steps_text
 
     readme = Path("README.md").read_text(encoding="utf-8")
-    assert "DataPulse v14.0.0" in readme
+    assert "DataPulse v19.0.0" in readme
     assert "docker compose up -d --build" in readme

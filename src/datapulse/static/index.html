@@ -3,468 +3,547 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>DataPulse v18.1 — Observatoire Gouvernance &amp; Qualité des Données</title>
+  <title>DataPulse — Observatoire d'Ingénierie &amp; Gouvernance des Données</title>
   <link rel="stylesheet" href="/static/styles.css" />
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand">
-      <div class="brand-logo">DP</div>
-      <div>
-        <h1>DataPulse Observatoire <span class="badge-ver">v18.2.0</span></h1>
-        <p>Gouvernance Qualité, RGPD/PII, Chaos Engineering, Lineage SHA-256 &amp; Data Catalog</p>
+  <div class="app-shell">
+    <!-- ==================== SIDEBAR NAVIGATION ==================== -->
+    <aside class="sidebar">
+      <div class="sidebar-brand">
+        <div class="brand-mark">DP</div>
+        <div>
+          <div class="brand-title">DataPulse <span class="ver-pill">v19.0.0</span></div>
+          <div class="brand-sub">Data Quality &amp; Governance</div>
+        </div>
       </div>
-    </div>
 
-    <div class="auth-bar">
-      <span id="auth-pill" class="pill pill-warn">Session non active</span>
-      <input id="api-key-input" type="password" placeholder="Clé API (dp_live_...)" />
-      <button id="btn-apply-key" class="btn btn-secondary">Appliquer</button>
-      <button id="btn-demo-bootstrap" class="btn btn-primary" title="Génère et active une clé Admin instantanément sans terminal">
-        ⚡ Session Démo (1 clic)
+      <button id="btn-cmd-palette" class="cmd-trigger" title="Raccourci Ctrl + K">
+        <span>🔍 Recherche rapide...</span>
+        <kbd>Ctrl K</kbd>
       </button>
-      <a href="/docs" target="_blank" class="btn btn-ghost">API Docs</a>
-      <a href="/metrics" target="_blank" class="btn btn-ghost">Metrics</a>
-    </div>
-  </header>
 
-  <nav class="nav-tabs" id="main-nav">
-    <button class="tab-btn active" data-tab="overview">1. Cockpit Exécutif</button>
-    <button class="tab-btn" data-tab="pipelines">2. Studio d'Audit (Données &amp; SQL)</button>
-    <button class="tab-btn" data-tab="quarantine">3. Quarantaine &amp; Remédiation</button>
-    <button class="tab-btn" data-tab="catalog">4. Data Catalog &amp; SLA — Glossaire</button>
-    <button class="tab-btn" data-tab="pii">5. Gouvernance PII &amp; RGPD</button>
-    <button class="tab-btn" data-tab="chaos">6. Labo Chaos &amp; Synthèse</button>
-    <button class="tab-btn" data-tab="governance">7. Drift, Lineage &amp; Sécurité RBAC</button>
-  </nav>
+      <nav class="side-nav" id="main-nav">
+        <div class="nav-group-label">OBSERVABILITÉ</div>
+        <button class="tab-btn active" data-tab="overview">
+          <span class="nav-ico">◈</span> Cockpit Exécutif
+        </button>
+        <button class="tab-btn" data-tab="pipelines">
+          <span class="nav-ico">⚡</span> Studio d'Audit (CSV / SQL)
+        </button>
+        <button class="tab-btn" data-tab="quarantine">
+          <span class="nav-ico">🛡️</span> Quarantaine &amp; Replay
+          <span id="nav-quar-badge" class="nav-badge">0</span>
+        </button>
 
-  <main class="container">
-    <!-- BANNIERE ONBOARDING ZERO-TERMINAL -->
-    <div id="onboarding-banner" class="onboarding-card">
-      <div>
-        <h3>👋 Bienvenue sur DataPulse Observatoire — Mode Zéro Terminal</h3>
-        <p>L'API est protégée par sécurité Zero-Trust RBAC. Activez une session Admin de démonstration en un clic pour déverrouiller les audits, le catalogue YAML, la quarantaine et les téléchargements sans ligne de commande.</p>
-      </div>
-      <button id="btn-banner-bootstrap" class="btn btn-primary btn-lg">⚡ Démarrer la Session Démo Maintenant</button>
-    </div>
+        <div class="nav-group-label">GOUVERNANCE &amp; CONFORMITÉ</div>
+        <button class="tab-btn" data-tab="catalog">
+          <span class="nav-ico">📚</span> Data Catalog &amp; SLA
+        </button>
+        <button class="tab-btn" data-tab="pii">
+          <span class="nav-ico">🔒</span> Conformité RGPD / PII
+        </button>
 
-    <!-- ==================== ONGLET 1 : COCKPIT EXECUTIF ==================== -->
-    <section id="tab-overview" class="tab-panel active">
-      <!-- RUBAN STORIES SANTE DES DOMAINES (STYLE INSTAGRAM/TELEGRAM) -->
-      <div class="stories-bar" id="domain-stories-bar"></div>
+        <div class="nav-group-label">RÉSILIENCE &amp; CRYPTOGRAPHIE</div>
+        <button class="tab-btn" data-tab="chaos">
+          <span class="nav-ico">🧪</span> Chaos Lab &amp; Synthèse
+        </button>
+        <button class="tab-btn" data-tab="governance">
+          <span class="nav-ico">🔏</span> Drift, Lineage &amp; RBAC
+        </button>
+      </nav>
 
-      <div class="kpi-grid">
-        <div class="kpi-card">
-          <span class="kpi-label">Score Santé (Dernier Run)</span>
-          <strong id="kpi-score" class="kpi-val">—</strong>
-          <small id="kpi-grade" class="kpi-sub">En attente de connexion</small>
-        </div>
-        <div class="kpi-card">
-          <span class="kpi-label">Exécutions Totales</span>
-          <strong id="kpi-runs" class="kpi-val">—</strong>
-          <small class="kpi-sub">Pipelines audités</small>
-        </div>
-        <div class="kpi-card">
-          <span class="kpi-label">Lignes Analysées</span>
-          <strong id="kpi-rows" class="kpi-val">—</strong>
-          <small class="kpi-sub">Volume cumulé</small>
-        </div>
-        <div class="kpi-card">
-          <span class="kpi-label">Incidents Détectés</span>
-          <strong id="kpi-findings" class="kpi-val">—</strong>
-          <small class="kpi-sub">Règles &amp; anomalies</small>
-        </div>
-        <div class="kpi-card">
-          <span class="kpi-label">Quarantaine Active</span>
-          <strong id="kpi-quarantine" class="kpi-val">—</strong>
-          <small class="kpi-sub">Lignes isolées (PENDING)</small>
-        </div>
-        <div class="kpi-card">
-          <span class="kpi-label">Conformité SLA Catalogue</span>
-          <strong id="kpi-sla" class="kpi-val">—</strong>
-          <small id="kpi-assets" class="kpi-sub">Actifs gouvernés</small>
-        </div>
-      </div>
-
-      <div class="card">
-        <div class="card-header">
-          <div>
-            <h2>Historique des Exécutions (Cliquez sur « Inspecter &amp; Télécharger »)</h2>
-            <p class="muted">Chaque exécution donne accès au détail des règles violées, au rapport HTML et aux CSV nettoyé/annoté.</p>
+      <div class="sidebar-footer">
+        <div class="auth-status-card">
+          <div class="auth-status-top">
+            <span class="status-dot" id="auth-dot"></span>
+            <span id="auth-pill">Connexion...</span>
           </div>
-          <div class="toolbar">
-            <select id="filter-domain-select">
-              <option value="">Tous les domaines</option>
-            </select>
-            <button id="btn-refresh-all" class="btn btn-primary">Actualiser</button>
+          <div class="auth-input-row">
+            <input id="api-key-input" type="password" placeholder="Clé API (dp_live_...)" />
+            <button id="btn-apply-key" class="btn btn-secondary btn-xs">OK</button>
           </div>
+          <button id="btn-evaluator-session" class="btn btn-emerald btn-xs full-w">
+            ⚡ Session Évaluateur (Accès Direct)
+          </button>
         </div>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Run ID</th>
-                <th>Domaine</th>
-                <th>Source</th>
-                <th>Lignes</th>
-                <th>Incidents</th>
-                <th>Durée</th>
-                <th>Statut</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody id="runs-tbody">
-              <tr><td colspan="8" class="empty-cell">Cliquez sur « Démarrer la Session Démo Maintenant » ci-dessus pour charger vos données.</td></tr>
-            </tbody>
-          </table>
+        <div class="footer-links">
+          <a href="/docs" target="_blank">OpenAPI</a>
+          <span>•</span>
+          <a href="/metrics" target="_blank">Prometheus</a>
+          <span>•</span>
+          <a href="/health/ready" target="_blank">Health</a>
         </div>
       </div>
-    </section>
+    </aside>
 
-    <!-- ==================== ONGLET 2 : STUDIO D'AUDIT ==================== -->
-    <section id="tab-pipelines" class="tab-panel">
-      <div class="grid-2">
-        <div class="card">
-          <h2>⚡ Audit Instantané sur Vrais Jeux de Données</h2>
-          <p class="muted">Testez DataPulse sans fichier externe grâce aux datasets réels embarqués.</p>
-          <form id="demo-dataset-form" class="form-stack">
-            <label>Jeu de données réel disponible
-              <select id="demo-dataset-select"></select>
-            </label>
-            <label>Contrat de domaine cible
-              <select id="demo-dataset-domain">
-                <option value="auto">auto — Détection / Inférence automatique</option>
-              </select>
-            </label>
-            <label class="checkbox-row">
-              <input id="demo-dataset-quarantine" type="checkbox" checked />
-              Isoler automatiquement les lignes invalides en quarantaine
-            </label>
-            <button type="submit" class="btn btn-primary">Lancer l'Audit sur ce Dataset</button>
-          </form>
-          <div id="demo-dataset-feedback" class="feedback"></div>
+    <!-- ==================== CONTENU PRINCIPAL ==================== -->
+    <div class="workspace">
+      <header class="workspace-header">
+        <div>
+          <h1 id="page-title">Cockpit Exécutif &amp; Santé des Données</h1>
+          <p id="page-subtitle" class="muted">Surveillance temps réel des contrats, dérives statistiques, conformité RGPD et certificats HMAC-SHA256.</p>
         </div>
-
-        <div class="card">
-          <h2>📁 Importer et Auditer un Fichier Local (CSV / JSONL)</h2>
-          <p class="muted">Glissez votre propre fichier métier pour exécuter le pipeline complet.</p>
-          <form id="upload-form" class="form-stack">
-            <label>Fichier source (.csv, .jsonl)
-              <input id="upload-file" type="file" accept=".csv,.jsonl,.json" required />
-            </label>
-            <label>Domaine (ou inférence automatique)
-              <select id="upload-domain-select">
-                <option value="auto">auto — Détection / Inférence automatique</option>
-              </select>
-            </label>
-            <label class="checkbox-row">
-              <input id="upload-quarantine" type="checkbox" checked />
-              Activer la quarantaine et l'export sain (_clean.csv)
-            </label>
-            <button type="submit" class="btn btn-primary">Uploader &amp; Auditer</button>
-          </form>
-          <div id="upload-feedback" class="feedback"></div>
+        <div class="header-actions">
+          <select id="filter-domain-select" class="select-pill">
+            <option value="">Tous les domaines</option>
+          </select>
+          <button id="btn-refresh-all" class="btn btn-primary">↻ Actualiser</button>
         </div>
-      </div>
+      </header>
 
-      <div class="grid-2">
-        <div class="card">
-          <h2>🗄️ Connecteur Base de Données SQL (Lecture Seule)</h2>
-          <p class="muted">Inspectez les tables d'une base SQLite et auditez directement une table métier.</p>
-          <form id="sql-form" class="form-stack">
-            <label>URI de connexion SQL
-              <input id="sql-uri" type="text" value="sqlite:///data/raw/entrepot_demo.sqlite" required />
-            </label>
-            <div class="inline-row">
-              <label style="flex:1">Table cible
-                <input id="sql-table" type="text" value="commandes_sql" required />
-              </label>
-              <button type="button" id="btn-sql-tables" class="btn btn-secondary" style="margin-top:22px">Lister les tables</button>
+      <main class="workspace-body">
+        <!-- ==================== ONGLET 1 : COCKPIT EXECUTIF ==================== -->
+        <section id="tab-overview" class="tab-panel active">
+          <!-- RUBAN STORIES SANTE DES DOMAINES -->
+          <div class="stories-bar" id="domain-stories-bar"></div>
+
+          <!-- GRILLE HERO : JAUGE SCORE QUALITE + COURBE EVOLUTION SVG -->
+          <div class="hero-analytics-grid">
+            <div class="glass-card score-hero-card">
+              <div class="card-top-label">SCORE SANTÉ QUALITÉ (DERNIER RUN)</div>
+              <div class="radial-wrap">
+                <svg viewBox="0 0 160 160" class="radial-svg">
+                  <circle cx="80" cy="80" r="66" class="radial-bg" />
+                  <circle cx="80" cy="80" r="66" id="radial-progress" class="radial-fg" stroke-dasharray="414.69" stroke-dashoffset="414.69" />
+                </svg>
+                <div class="radial-center">
+                  <strong id="hero-score-val">—</strong>
+                  <span id="hero-grade-badge" class="grade-pill">GRADE —</span>
+                </div>
+              </div>
+              <div id="hero-score-domain" class="muted center-txt">En attente de données</div>
+              <div class="pillars-grid" id="score-pillars-grid"></div>
             </div>
-            <label>Domaine cible
-              <select id="sql-domain-select">
-                <option value="auto">auto — Détection / Inférence automatique</option>
-              </select>
-            </label>
-            <label class="checkbox-row">
-              <input id="sql-quarantine" type="checkbox" checked />
-              Isoler les lignes non conformes en quarantaine
-            </label>
-            <button type="submit" class="btn btn-primary">Auditer la Table SQL</button>
-          </form>
-          <div id="sql-feedback" class="feedback"></div>
-        </div>
 
-        <div class="card">
-          <h2>📂 Orchestrateur Hot-Folder (Surveillance Répertoire)</h2>
-          <p class="muted">Scanne un dossier d'arrivée, traite les nouveaux fichiers et les archive.</p>
-          <form id="watch-form" class="form-stack">
-            <label>Répertoire surveillé
-              <input id="watch-dir" type="text" value="data/inbox" required />
-            </label>
-            <label>Domaine par défaut
-              <select id="watch-domain-select">
-                <option value="auto">auto — Détection / Inférence automatique</option>
-              </select>
-            </label>
-            <button type="submit" class="btn btn-primary">Scanner le Répertoire</button>
-          </form>
-          <div id="watch-feedback" class="feedback"></div>
-        </div>
-      </div>
-    </section>
-
-    <!-- ==================== ONGLET 3 : QUARANTAINE ==================== -->
-    <section id="tab-quarantine" class="tab-panel">
-      <div class="card">
-        <div class="card-header">
-          <div>
-            <h2>🛡️ Remédiation Rapide de Quarantaine</h2>
-            <p class="muted">Inspectez chaque ligne rejetée par les règles métier et décidez en un clic (Approuver ou Rejeter).</p>
-          </div>
-          <div class="toolbar">
-            <select id="quar-domain-filter">
-              <option value="">Tous les domaines</option>
-            </select>
-            <select id="quar-status-filter">
-              <option value="PENDING">PENDING (À traiter)</option>
-              <option value="APPROVED">APPROVED (Validées)</option>
-              <option value="REJECTED">REJECTED (Rejetées)</option>
-              <option value="REPLAYED">REPLAYED (Réintégrées)</option>
-            </select>
-            <button id="btn-replay-quarantine" class="btn btn-success">🔄 Rejouer les lignes APPROVED</button>
-            <button id="btn-load-quarantine" class="btn btn-primary">Actualiser la file</button>
-          </div>
-        </div>
-        <div id="quarantine-feedback" class="feedback"></div>
-        <div id="quarantine-cards-grid" class="quar-grid"></div>
-      </div>
-    </section>
-
-    <!-- ==================== ONGLET 4 : DATA CATALOG & GLOSSAIRE ==================== -->
-    <section id="tab-catalog" class="tab-panel">
-      <div class="card">
-        <div class="card-header">
-          <div>
-            <h2>📚 Data Catalog &amp; SLA Freshness Explorer</h2>
-            <p class="muted">Cartographie des actifs, détection PII des contrats YAML et surveillance de fraîcheur SLA.</p>
-          </div>
-          <div class="toolbar">
-            <input id="cat-search-input" type="text" placeholder="Rechercher un actif, owner, colonne..." />
-            <button id="btn-cat-filter" class="btn btn-secondary">Filtrer</button>
-            <button id="btn-cat-sync" class="btn btn-primary">Sync YAML</button>
-          </div>
-        </div>
-        <div id="cat-feedback" class="feedback"></div>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Domaine</th>
-                <th>Classification</th>
-                <th>Owner / Steward</th>
-                <th>Colonnes &amp; PII détectés</th>
-                <th>SLA Fraîcheur</th>
-                <th>Dernier Run</th>
-              </tr>
-            </thead>
-            <tbody id="cat-assets-tbody"></tbody>
-          </table>
-        </div>
-      </div>
-
-      <div class="grid-2">
-        <div class="card">
-          <h2>➕ Ajouter / Mettre à jour un Terme du Glossaire Métier</h2>
-          <form id="glossary-form" class="form-stack">
-            <label>Terme métier / KPI
-              <input id="gl-term" type="text" placeholder="ex: Chiffre d'Affaires Net" required />
-            </label>
-            <label>Domaine associé
-              <select id="gl-domain">
-                <option value="global">global — Transverse entreprise</option>
-              </select>
-            </label>
-            <label>Définition métier
-              <input id="gl-def" type="text" placeholder="Montant total validé hors lignes en quarantaine" required />
-            </label>
-            <label>Formule de calcul / Règle SQL
-              <input id="gl-formula" type="text" placeholder="SUM(quantite * prix_unitaire)" />
-            </label>
-            <button type="submit" class="btn btn-primary">Enregistrer dans le Glossaire</button>
-          </form>
-          <div id="glossary-feedback" class="feedback"></div>
-        </div>
-
-        <div class="card">
-          <div class="card-header">
-            <h2>📖 Dictionnaire des KPIs &amp; Termes Métiers</h2>
-            <button id="btn-load-glossary" class="btn btn-secondary">Actualiser</button>
-          </div>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Terme</th>
-                  <th>Domaine</th>
-                  <th>Définition &amp; Formule</th>
-                  <th>Action</th>
-                </tr>
-              </thead>
-              <tbody id="glossary-tbody"></tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <!-- ==================== ONGLET 5 : PII & RGPD ==================== -->
-    <section id="tab-pii" class="tab-panel">
-      <div class="grid-2">
-        <div class="card">
-          <h2>🔒 Scanner &amp; Pseudonymiser les Données Personnelles (RGPD)</h2>
-          <p class="muted">Détection automatique (Email, Téléphone, IBAN, NIR, IP) et export anonymisé téléchargeable.</p>
-          <form id="pii-form" class="form-stack">
-            <label>Fichier à analyser (.csv)
-              <input id="pii-file" type="file" accept=".csv" required />
-            </label>
-            <label>Stratégie d'anonymisation
-              <select id="pii-strategy">
-                <option value="partial">partial — Masquage partiel (ex: am***@exemple.bj)</option>
-                <option value="hash">hash — Pseudonymisation SHA-256</option>
-                <option value="redact">redact — Suppression complète ([REDACTED])</option>
-              </select>
-            </label>
-            <label>Colonnes ciblées (laisser vide = toutes les colonnes PII détectées)
-              <input id="pii-columns" type="text" placeholder="ex: email, telephone, iban" />
-            </label>
-            <div class="toolbar">
-              <button type="button" id="btn-pii-scan" class="btn btn-secondary">1. Scanner PII</button>
-              <button type="submit" class="btn btn-primary">2. Anonymiser &amp; Télécharger CSV</button>
+            <div class="glass-card chart-hero-card">
+              <div class="card-header">
+                <div>
+                  <div class="card-top-label">TRAJECTOIRE DE QUALITÉ &amp; VOLUME (16 DERNIÈRES EXÉCUTIONS)</div>
+                  <h2>Évolution des Scores Qualité (0–100)</h2>
+                </div>
+                <span id="throughput-pill" class="tag tag-emerald">Débit : — lignes/s</span>
+              </div>
+              <div id="score-trend-chart" class="svg-chart-box"></div>
             </div>
-          </form>
-          <div id="pii-feedback" class="feedback"></div>
-        </div>
-
-        <div class="card">
-          <h2>📊 Cartographie des Colonnes Sensibles Détectées</h2>
-          <div id="pii-results" class="code-box">Sélectionnez un fichier (ex: data/raw/clients_pii_test.csv) puis cliquez sur « Scanner PII ».</div>
-        </div>
-      </div>
-    </section>
-
-    <!-- ==================== ONGLET 6 : CHAOS LAB ==================== -->
-    <section id="tab-chaos" class="tab-panel">
-      <div class="grid-2">
-        <div class="card">
-          <h2>🧪 Simulateur Chaos Engineering &amp; Données Synthétiques</h2>
-          <p class="muted">Générez un jeu de données réaliste, injectez des anomalies contrôlées et mesurez la résilience du pipeline.</p>
-          <form id="chaos-form" class="form-stack">
-            <label>Domaine cible
-              <select id="chaos-domain"></select>
-            </label>
-            <label>Nombre de lignes à générer
-              <input id="chaos-rows" type="number" min="10" max="5000" value="80" required />
-            </label>
-            <label>Taux de corruption Chaos (0.0 à 0.8)
-              <input id="chaos-rate" type="number" step="0.05" min="0" max="0.8" value="0.25" required />
-            </label>
-            <label class="checkbox-row">
-              <input id="chaos-auto-audit" type="checkbox" checked />
-              Lancer automatiquement l'audit qualité sur le dataset généré
-            </label>
-            <button type="submit" class="btn btn-primary">Générer &amp; Injecter le Chaos</button>
-          </form>
-          <div id="chaos-feedback" class="feedback"></div>
-        </div>
-
-        <div class="card">
-          <h2>🔬 Aperçu des Données &amp; Anomalies Injectées</h2>
-          <div id="chaos-results" class="code-box">Lancez une génération Chaos pour inspecter l'échantillon produit et son score qualité.</div>
-        </div>
-      </div>
-    </section>
-
-    <!-- ==================== ONGLET 7 : DRIFT, LINEAGE & SECURITE ==================== -->
-    <section id="tab-governance" class="tab-panel">
-      <div class="grid-2">
-        <div class="card">
-          <h2>🔏 Data Lineage &amp; Certificat Cryptographique SHA-256</h2>
-          <form id="lineage-form" class="form-stack">
-            <label>Sélectionner une exécution (Run ID)
-              <select id="lineage-run-select"></select>
-            </label>
-            <button type="submit" class="btn btn-primary">Inspecter Lineage &amp; Sceau SHA-256</button>
-          </form>
-          <div id="lineage-results" class="code-box" style="margin-top:12px">Choisissez un run dans la liste ci-dessus.</div>
-        </div>
-
-        <div class="card">
-          <h2>📈 Détection de Dérive Statistique (Schema &amp; Data Drift KS / PSI)</h2>
-          <form id="drift-form" class="form-stack">
-            <label>Domaine à comparer (2 dernières exécutions)
-              <select id="drift-domain-select"></select>
-            </label>
-            <button type="submit" class="btn btn-primary">Comparer les 2 Derniers Runs</button>
-          </form>
-          <div id="drift-results" class="code-box" style="margin-top:12px">Compare les distributions (PSI, Kolmogorov-Smirnov, Jensen-Shannon).</div>
-        </div>
-      </div>
-
-      <div class="grid-2">
-        <div class="card">
-          <h2>🔑 Gestionnaire de Clés API Zero-Trust (RBAC)</h2>
-          <form id="key-create-form" class="inline-row" style="margin-bottom:12px">
-            <input id="new-key-name" type="text" placeholder="Nom (ex: recruteur-demo)" required style="flex:1" />
-            <select id="new-key-role">
-              <option value="viewer">viewer (Lecture)</option>
-              <option value="operator">operator (Exécution)</option>
-              <option value="admin" selected>admin (Complet)</option>
-            </select>
-            <button type="submit" class="btn btn-primary">Créer Clé</button>
-          </form>
-          <div id="key-feedback" class="feedback"></div>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>ID</th>
-                  <th>Nom</th>
-                  <th>Rôle</th>
-                  <th>Statut</th>
-                  <th>Action</th>
-                </tr>
-              </thead>
-              <tbody id="keys-tbody"></tbody>
-            </table>
           </div>
-        </div>
 
-        <div class="card">
-          <div class="card-header">
-            <h2>🛡️ Journal d'Audit de Sécurité</h2>
-            <button id="btn-load-audit" class="btn btn-secondary">Actualiser</button>
+          <!-- KPI CARDS -->
+          <div class="kpi-grid">
+            <div class="glass-card kpi-card">
+              <span class="kpi-label">Exécutions Auditées</span>
+              <strong id="kpi-runs" class="kpi-val">—</strong>
+              <small class="kpi-sub">Pipelines certifiés</small>
+            </div>
+            <div class="glass-card kpi-card">
+              <span class="kpi-label">Volume Analysé</span>
+              <strong id="kpi-rows" class="kpi-val">—</strong>
+              <small class="kpi-sub">Enregistrements traités</small>
+            </div>
+            <div class="glass-card kpi-card">
+              <span class="kpi-label">Anomalies Détectées</span>
+              <strong id="kpi-findings" class="kpi-val">—</strong>
+              <small class="kpi-sub">Règles &amp; outliers MAD</small>
+            </div>
+            <div class="glass-card kpi-card">
+              <span class="kpi-label">Quarantaine Active</span>
+              <strong id="kpi-quarantine" class="kpi-val">—</strong>
+              <small class="kpi-sub">Lignes à arbitrer</small>
+            </div>
+            <div class="glass-card kpi-card">
+              <span class="kpi-label">Conformité SLA</span>
+              <strong id="kpi-sla" class="kpi-val">—</strong>
+              <small id="kpi-assets" class="kpi-sub">Actifs YAML gouvernés</small>
+            </div>
           </div>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Horodatage</th>
-                  <th>Acteur</th>
-                  <th>Action</th>
-                  <th>Ressource</th>
-                  <th>Résultat</th>
-                </tr>
-              </thead>
-              <tbody id="audit-tbody"></tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-    </section>
-  </main>
 
-  <!-- ==================== MODALE DETAIL D'UN RUN + TELECHARGEMENTS ==================== -->
+          <!-- TABLEAU HISTORIQUE -->
+          <div class="glass-card">
+            <div class="card-header">
+              <div>
+                <h2>Journal des Exécutions &amp; Artefacts Certifiés</h2>
+                <p class="muted">Cliquez sur « Inspecter » pour ouvrir le détail des règles déclenchées et télécharger le rapport HTML ou les CSV.</p>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Run ID</th>
+                    <th>Domaine</th>
+                    <th>Source</th>
+                    <th>Lignes</th>
+                    <th>Incidents</th>
+                    <th>Débit</th>
+                    <th>Statut</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="runs-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- ==================== ONGLET 2 : STUDIO D'AUDIT ==================== -->
+        <section id="tab-pipelines" class="tab-panel">
+          <div class="grid-2">
+            <div class="glass-card">
+              <h2>⚡ Audit Instantané sur Jeux de Données Embarqués</h2>
+              <p class="muted">Exécutez le moteur complet (profilage, règles YAML, MAD, quarantaine) sur un dataset réel.</p>
+              <form id="demo-dataset-form" class="form-stack">
+                <label>Jeu de données disponible
+                  <select id="demo-dataset-select"></select>
+                </label>
+                <label>Contrat de domaine cible
+                  <select id="demo-dataset-domain">
+                    <option value="auto">auto — Détection / Inférence automatique</option>
+                  </select>
+                </label>
+                <label class="checkbox-row">
+                  <input id="demo-dataset-quarantine" type="checkbox" checked />
+                  Isoler automatiquement les lignes non conformes en quarantaine
+                </label>
+                <button type="submit" class="btn btn-primary">Lancer l'Audit Maintenant</button>
+              </form>
+              <div id="demo-dataset-feedback" class="feedback"></div>
+            </div>
+
+            <div class="glass-card">
+              <h2>📁 Importer et Auditer un Fichier Local (CSV / JSONL)</h2>
+              <p class="muted">Chargez votre propre fichier métier depuis votre poste pour un audit complet.</p>
+              <form id="upload-form" class="form-stack">
+                <label>Fichier source (.csv, .jsonl)
+                  <input id="upload-file" type="file" accept=".csv,.jsonl,.json" required />
+                </label>
+                <label>Domaine (ou inférence automatique)
+                  <select id="upload-domain-select">
+                    <option value="auto">auto — Détection / Inférence automatique</option>
+                  </select>
+                </label>
+                <label class="checkbox-row">
+                  <input id="upload-quarantine" type="checkbox" checked />
+                  Activer la quarantaine et générer le CSV sain (_clean.csv)
+                </label>
+                <button type="submit" class="btn btn-primary">Analyser le Fichier</button>
+              </form>
+              <div id="upload-feedback" class="feedback"></div>
+            </div>
+          </div>
+
+          <div class="grid-2">
+            <div class="glass-card">
+              <h2>🗄️ Connecteur Base de Données SQL (Lecture Seule)</h2>
+              <p class="muted">Exploration de schéma et audit direct sur base SQLite / SQL avec protection anti-mutation.</p>
+              <form id="sql-form" class="form-stack">
+                <label>URI de connexion SQL
+                  <input id="sql-uri" type="text" value="sqlite:///data/raw/entrepot_demo.sqlite" required />
+                </label>
+                <div class="inline-row">
+                  <label style="flex:1">Table cible
+                    <input id="sql-table" type="text" value="commandes_sql" required />
+                  </label>
+                  <button type="button" id="btn-sql-tables" class="btn btn-secondary" style="margin-top:22px">Lister tables</button>
+                </div>
+                <label>Domaine cible
+                  <select id="sql-domain-select">
+                    <option value="auto">auto — Détection / Inférence automatique</option>
+                  </select>
+                </label>
+                <label class="checkbox-row">
+                  <input id="sql-quarantine" type="checkbox" checked />
+                  Isoler les lignes non conformes en quarantaine
+                </label>
+                <button type="submit" class="btn btn-primary">Auditer la Table SQL</button>
+              </form>
+              <div id="sql-feedback" class="feedback"></div>
+            </div>
+
+            <div class="glass-card">
+              <h2>📂 Orchestrateur Hot-Folder (Confiné data/)</h2>
+              <p class="muted">Surveillance de répertoire d'arrivée avec déduplication SHA-256 et archivage automatique.</p>
+              <form id="watch-form" class="form-stack">
+                <label>Répertoire surveillé (dans data/)
+                  <input id="watch-dir" type="text" value="data/inbox" required />
+                </label>
+                <label>Domaine par défaut
+                  <select id="watch-domain-select">
+                    <option value="auto">auto — Détection / Inférence automatique</option>
+                  </select>
+                </label>
+                <button type="submit" class="btn btn-primary">Scanner le Répertoire</button>
+              </form>
+              <div id="watch-feedback" class="feedback"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ==================== ONGLET 3 : QUARANTAINE ==================== -->
+        <section id="tab-quarantine" class="tab-panel">
+          <div class="glass-card">
+            <div class="card-header">
+              <div>
+                <h2>🛡️ Remédiation Interactive &amp; Replay Transactionnel</h2>
+                <p class="muted">Approuvez ou rejetez chaque ligne isolée, puis consolidez les lignes approuvées dans un export sain certifié.</p>
+              </div>
+              <div class="toolbar">
+                <select id="quar-domain-filter">
+                  <option value="">Tous les domaines</option>
+                </select>
+                <select id="quar-status-filter">
+                  <option value="PENDING">PENDING (À traiter)</option>
+                  <option value="APPROVED">APPROVED (Validées)</option>
+                  <option value="REPLAYED">REPLAYED (Réintégrées)</option>
+                  <option value="REJECTED">REJECTED (Rejetées)</option>
+                </select>
+                <button id="btn-replay-quarantine" class="btn btn-emerald">🔄 Rejouer les APPROVED</button>
+                <button id="btn-load-quarantine" class="btn btn-secondary">Actualiser</button>
+              </div>
+            </div>
+            <div id="quarantine-feedback" class="feedback"></div>
+            <div id="quarantine-cards-grid" class="quar-grid"></div>
+          </div>
+        </section>
+
+        <!-- ==================== ONGLET 4 : DATA CATALOG & GLOSSAIRE ==================== -->
+        <section id="tab-catalog" class="tab-panel">
+          <div class="glass-card">
+            <div class="card-header">
+              <div>
+                <h2>📚 Enterprise Data Catalog &amp; SLA Freshness</h2>
+                <p class="muted">Inventaire des actifs YAML, classification de confidentialité, colonnes PII et respect des SLA.</p>
+              </div>
+              <div class="toolbar">
+                <input id="cat-search-input" type="text" placeholder="Rechercher domaine, owner, colonne..." />
+                <button id="btn-cat-filter" class="btn btn-secondary">Filtrer</button>
+                <button id="btn-cat-sync" class="btn btn-primary">Sync YAML</button>
+              </div>
+            </div>
+            <div id="cat-feedback" class="feedback"></div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Domaine</th>
+                    <th>Classification</th>
+                    <th>Owner / Steward</th>
+                    <th>Schéma &amp; PII détectés</th>
+                    <th>SLA Fraîcheur</th>
+                    <th>Dernier Run</th>
+                  </tr>
+                </thead>
+                <tbody id="cat-assets-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="grid-2">
+            <div class="glass-card">
+              <h2>➕ Définir un Terme ou KPI dans le Glossaire Métier</h2>
+              <form id="glossary-form" class="form-stack">
+                <label>Terme métier / KPI
+                  <input id="gl-term" type="text" placeholder="ex: Taux de Rétention Net" required />
+                </label>
+                <label>Domaine associé
+                  <select id="gl-domain">
+                    <option value="global">global — Transverse entreprise</option>
+                  </select>
+                </label>
+                <label>Définition métier
+                  <input id="gl-def" type="text" placeholder="Revenu récurrent conservé après attrition" required />
+                </label>
+                <label>Formule de calcul / Règle SQL
+                  <input id="gl-formula" type="text" placeholder="SUM(montant_valide) / COUNT(DISTINCT client_id)" />
+                </label>
+                <button type="submit" class="btn btn-primary">Enregistrer le Terme</button>
+              </form>
+              <div id="glossary-feedback" class="feedback"></div>
+            </div>
+
+            <div class="glass-card">
+              <div class="card-header">
+                <h2>📖 Dictionnaire des KPIs Métiers</h2>
+                <button id="btn-load-glossary" class="btn btn-secondary">Actualiser</button>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Terme</th>
+                      <th>Domaine</th>
+                      <th>Définition &amp; Formule</th>
+                      <th>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody id="glossary-tbody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ==================== ONGLET 5 : PII & RGPD ==================== -->
+        <section id="tab-pii" class="tab-panel">
+          <div class="grid-2">
+            <div class="glass-card">
+              <h2>🔒 Scanner &amp; Pseudonymiser les Données Personnelles (RGPD)</h2>
+              <p class="muted">Détection automatique (Email, Téléphone, IBAN, NIR, IP) et génération d'un export conforme.</p>
+              <form id="pii-form" class="form-stack">
+                <label>Fichier à analyser (.csv)
+                  <input id="pii-file" type="file" accept=".csv" required />
+                </label>
+                <label>Stratégie d'anonymisation
+                  <select id="pii-strategy">
+                    <option value="partial">partial — Masquage partiel (ex: am***@exemple.bj)</option>
+                    <option value="hash">hash — Pseudonymisation SHA-256</option>
+                    <option value="redact">redact — Suppression complète ([REDACTED])</option>
+                  </select>
+                </label>
+                <label>Colonnes ciblées (vide = toutes les colonnes sensibles détectées)
+                  <input id="pii-columns" type="text" placeholder="ex: email, telephone, iban" />
+                </label>
+                <div class="toolbar">
+                  <button type="button" id="btn-pii-scan" class="btn btn-secondary">1. Scanner PII</button>
+                  <button type="submit" class="btn btn-primary">2. Anonymiser &amp; Télécharger</button>
+                </div>
+              </form>
+              <div id="pii-feedback" class="feedback"></div>
+            </div>
+
+            <div class="glass-card">
+              <h2>📊 Cartographie Visuelle des Colonnes Sensibles</h2>
+              <div id="pii-visual-results" class="visual-panel">
+                <p class="muted">Sélectionnez un fichier (ex: <code>data/raw/clients_pii_test.csv</code>) et cliquez sur « Scanner PII » pour afficher la matrice de sensibilité RGPD.</p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ==================== ONGLET 6 : CHAOS LAB ==================== -->
+        <section id="tab-chaos" class="tab-panel">
+          <div class="grid-2">
+            <div class="glass-card">
+              <h2>🧪 Simulateur Chaos Engineering &amp; Synthèse</h2>
+              <p class="muted">Injectez un taux contrôlé d'anomalies dans un jeu synthétique et mesurez la détection en direct.</p>
+              <form id="chaos-form" class="form-stack">
+                <label>Domaine cible
+                  <select id="chaos-domain"></select>
+                </label>
+                <label>Nombre de lignes à générer
+                  <input id="chaos-rows" type="number" min="10" max="5000" value="100" required />
+                </label>
+                <label>Taux de corruption Chaos (0.0 à 0.8)
+                  <input id="chaos-rate" type="number" step="0.05" min="0" max="0.8" value="0.25" required />
+                </label>
+                <label class="checkbox-row">
+                  <input id="chaos-auto-audit" type="checkbox" checked />
+                  Auditer immédiatement le jeu synthétique généré
+                </label>
+                <button type="submit" class="btn btn-primary">Exécuter l'Expérience Chaos</button>
+              </form>
+              <div id="chaos-feedback" class="feedback"></div>
+            </div>
+
+            <div class="glass-card">
+              <h2>🔬 Résultat de l'Expérience &amp; Résilience</h2>
+              <div id="chaos-visual-results" class="visual-panel">
+                <p class="muted">Lancez une simulation Chaos pour visualiser le taux de corruption injecté, le score de résilience et l'échantillon produit.</p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ==================== ONGLET 7 : DRIFT, LINEAGE & SECURITE ==================== -->
+        <section id="tab-governance" class="tab-panel">
+          <div class="grid-2">
+            <div class="glass-card">
+              <h2>🔏 Certificat d'Audit Signé HMAC-SHA256 &amp; Lineage</h2>
+              <form id="lineage-form" class="inline-row" style="margin-bottom:14px">
+                <select id="lineage-run-select" style="flex:1"></select>
+                <button type="submit" class="btn btn-primary">Vérifier le Sceau</button>
+              </form>
+              <div id="lineage-visual-results" class="visual-panel">
+                <p class="muted">Sélectionnez une exécution pour vérifier l'authenticité cryptographique HMAC-SHA256 de son certificat.</p>
+              </div>
+            </div>
+
+            <div class="glass-card">
+              <h2>📈 Analyse de Dérive Statistique (PSI Laplace, Wasserstein-1, KS)</h2>
+              <form id="drift-form" class="inline-row" style="margin-bottom:14px">
+                <select id="drift-domain-select" style="flex:1"></select>
+                <button type="submit" class="btn btn-primary">Comparer 2 Runs</button>
+              </form>
+              <div id="drift-visual-results" class="visual-panel">
+                <p class="muted">Compare les distributions des deux dernières exécutions d'un domaine avec barres de dérive normalisées.</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="grid-2">
+            <div class="glass-card">
+              <h2>🔑 Gestionnaire de Clés API Zero-Trust (RBAC)</h2>
+              <form id="key-create-form" class="inline-row" style="margin-bottom:12px">
+                <input id="new-key-name" type="text" placeholder="Nom (ex: pipeline-prod)" required style="flex:1" />
+                <select id="new-key-role">
+                  <option value="viewer">viewer (Lecture)</option>
+                  <option value="operator">operator (Exécution)</option>
+                  <option value="admin" selected>admin (Complet)</option>
+                </select>
+                <button type="submit" class="btn btn-primary">Créer Clé</button>
+              </form>
+              <div id="key-feedback" class="feedback"></div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>ID</th>
+                      <th>Nom</th>
+                      <th>Rôle</th>
+                      <th>Statut</th>
+                      <th>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody id="keys-tbody"></tbody>
+                </table>
+              </div>
+            </div>
+
+            <div class="glass-card">
+              <div class="card-header">
+                <h2>🛡️ Journal d'Audit de Sécurité Immuable</h2>
+                <button id="btn-load-audit" class="btn btn-secondary">Actualiser</button>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Horodatage</th>
+                      <th>Acteur</th>
+                      <th>Action</th>
+                      <th>Ressource</th>
+                      <th>Résultat</th>
+                    </tr>
+                  </thead>
+                  <tbody id="audit-tbody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <!-- ==================== COMMAND PALETTE (CTRL + K) ==================== -->
+  <div id="cmd-modal" class="modal hidden">
+    <div class="modal-backdrop" id="cmd-close-bg"></div>
+    <div class="cmd-box">
+      <input id="cmd-input" type="text" placeholder="Tapez une commande ou un domaine (ex: quarantine, commerce, pii, chaos)..." />
+      <div id="cmd-list" class="cmd-list"></div>
+    </div>
+  </div>
+
+  <!-- ==================== MODALE DETAIL D'UN RUN ==================== -->
   <div id="run-modal" class="modal hidden">
     <div class="modal-backdrop" id="modal-close-bg"></div>
     <div class="modal-card">
@@ -475,20 +554,16 @@
         </div>
         <button id="btn-modal-close" class="btn btn-secondary">Fermer ✕</button>
       </div>
-
       <div class="download-bar">
         <button id="dl-report-btn" class="btn btn-primary">📄 Ouvrir Rapport HTML Complet</button>
-        <button id="dl-clean-btn" class="btn btn-secondary">✅ Télécharger CSV Sain (_clean.csv)</button>
+        <button id="dl-clean-btn" class="btn btn-emerald">✅ Télécharger CSV Sain (_clean.csv)</button>
         <button id="dl-annotated-btn" class="btn btn-secondary">🏷️ Télécharger CSV Annoté (_annotated.csv)</button>
       </div>
-
       <div id="modal-run-body" class="modal-body"></div>
     </div>
   </div>
 
-  <!-- TOAST NOTIFICATION FLOTTANT -->
   <div id="toast-box" class="toast hidden"></div>
-
   <script src="/static/app.js"></script>
 </body>
 </html>
