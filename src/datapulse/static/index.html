@@ -1,168 +1,175 @@
 <!DOCTYPE html>
-<html lang="fr">
+<html lang="fr" data-theme="light">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>DataPulse — Observatoire d'Ingénierie &amp; Gouvernance des Données</title>
+  <title>DataPulse v20.0.0 — Enterprise Data Observability Studio</title>
   <link rel="stylesheet" href="/static/styles.css" />
 </head>
 <body>
   <div class="app-shell">
-    <!-- ==================== SIDEBAR NAVIGATION ==================== -->
     <aside class="sidebar">
       <div class="sidebar-brand">
         <div class="brand-mark">DP</div>
         <div>
-          <div class="brand-title">DataPulse <span class="ver-pill">v19.0.0</span></div>
-          <div class="brand-sub">Data Quality &amp; Governance</div>
+          <div class="brand-title">DataPulse <span class="ver-pill">v20.0.0</span></div>
+          <div class="brand-sub">Observability Studio</div>
         </div>
       </div>
 
-      <button id="btn-cmd-palette" class="cmd-trigger" title="Raccourci Ctrl + K">
+      <button id="btn-cmd-palette" class="cmd-trigger" title="Raccourci Ctrl+K">
         <span>🔍 Recherche rapide...</span>
         <kbd>Ctrl K</kbd>
       </button>
 
-      <nav class="side-nav" id="main-nav">
+      <nav class="side-nav" id="main-tabs">
         <div class="nav-group-label">OBSERVABILITÉ</div>
-        <button class="tab-btn active" data-tab="overview">
-          <span class="nav-ico">◈</span> Cockpit Exécutif
-        </button>
-        <button class="tab-btn" data-tab="pipelines">
-          <span class="nav-ico">⚡</span> Studio d'Audit (CSV / SQL)
-        </button>
-        <button class="tab-btn" data-tab="quarantine">
-          <span class="nav-ico">🛡️</span> Quarantaine &amp; Replay
-          <span id="nav-quar-badge" class="nav-badge">0</span>
-        </button>
+        <button class="tab-btn active" data-tab="overview"><span class="nav-ico">◈</span> Cockpit Santé</button>
+        <button class="tab-btn" data-tab="pipelines"><span class="nav-ico">⚡</span> Studio d'Audit</button>
+        <button class="tab-btn" data-tab="quarantine"><span class="nav-ico">🛡️</span> Quarantaine <span id="nav-quar-badge" class="nav-badge">0</span></button>
 
-        <div class="nav-group-label">GOUVERNANCE &amp; CONFORMITÉ</div>
-        <button class="tab-btn" data-tab="catalog">
-          <span class="nav-ico">📚</span> Data Catalog &amp; SLA
-        </button>
-        <button class="tab-btn" data-tab="pii">
-          <span class="nav-ico">🔒</span> Conformité RGPD / PII
-        </button>
+        <div class="nav-group-label">GOUVERNANCE &amp; RGPD</div>
+        <button class="tab-btn" data-tab="catalog"><span class="nav-ico">📚</span> Data Catalog &amp; SLA</button>
+        <button class="tab-btn" data-tab="pii"><span class="nav-ico">🔒</span> RGPD / PII</button>
 
-        <div class="nav-group-label">RÉSILIENCE &amp; CRYPTOGRAPHIE</div>
-        <button class="tab-btn" data-tab="chaos">
-          <span class="nav-ico">🧪</span> Chaos Lab &amp; Synthèse
-        </button>
-        <button class="tab-btn" data-tab="governance">
-          <span class="nav-ico">🔏</span> Drift, Lineage &amp; RBAC
-        </button>
+        <div class="nav-group-label">RÉSILIENCE &amp; CONFIANCE</div>
+        <button class="tab-btn" data-tab="chaos"><span class="nav-ico">🧪</span> Chaos Lab</button>
+        <button class="tab-btn" data-tab="governance"><span class="nav-ico">🔏</span> Drift &amp; Certificats</button>
       </nav>
 
       <div class="sidebar-footer">
         <div class="auth-status-card">
           <div class="auth-status-top">
-            <span class="status-dot" id="auth-dot"></span>
+            <span id="auth-dot" class="status-dot"></span>
             <span id="auth-pill">Connexion...</span>
           </div>
           <div class="auth-input-row">
             <input id="api-key-input" type="password" placeholder="Clé API (dp_live_...)" />
             <button id="btn-apply-key" class="btn btn-secondary btn-xs">OK</button>
           </div>
-          <button id="btn-evaluator-session" class="btn btn-emerald btn-xs full-w">
-            ⚡ Session Évaluateur (Accès Direct)
-          </button>
+          <button id="btn-evaluator-session" class="btn btn-emerald btn-xs full-w">⚡ Session Évaluateur</button>
         </div>
         <div class="footer-links">
           <a href="/docs" target="_blank">OpenAPI</a>
-          <span>•</span>
+          <span>·</span>
           <a href="/metrics" target="_blank">Prometheus</a>
-          <span>•</span>
-          <a href="/health/ready" target="_blank">Health</a>
+          <span>·</span>
+          <a href="/health" target="_blank">Health</a>
         </div>
       </div>
     </aside>
 
-    <!-- ==================== CONTENU PRINCIPAL ==================== -->
     <div class="workspace">
       <header class="workspace-header">
         <div>
           <h1 id="page-title">Cockpit Exécutif &amp; Santé des Données</h1>
-          <p id="page-subtitle" class="muted">Surveillance temps réel des contrats, dérives statistiques, conformité RGPD et certificats HMAC-SHA256.</p>
+          <p id="page-subtitle" class="muted">Observabilité multi-contrats, détection d'anomalies IQR, dérives PSI/Wasserstein et preuves HMAC-SHA256.</p>
         </div>
         <div class="header-actions">
+          <button id="btn-theme-toggle" class="btn btn-secondary btn-sm" title="Basculer Clair / Sombre">🌙 Mode Sombre</button>
           <select id="filter-domain-select" class="select-pill">
             <option value="">Tous les domaines</option>
           </select>
-          <button id="btn-refresh-all" class="btn btn-primary">↻ Actualiser</button>
+          <button id="btn-refresh-all" class="btn btn-primary btn-sm">↻ Actualiser</button>
         </div>
       </header>
 
       <main class="workspace-body">
-        <!-- ==================== ONGLET 1 : COCKPIT EXECUTIF ==================== -->
         <section id="tab-overview" class="tab-panel active">
-          <!-- RUBAN STORIES SANTE DES DOMAINES -->
           <div class="stories-bar" id="domain-stories-bar"></div>
 
-          <!-- GRILLE HERO : JAUGE SCORE QUALITE + COURBE EVOLUTION SVG -->
+          <div class="grid-3">
+            <div class="glass-card donut-card">
+              <div class="card-top-label">RÉPARTITION DES CONTRÔLES</div>
+              <div id="donut-tests-box" class="donut-flex"></div>
+            </div>
+            <div class="glass-card donut-card">
+              <div class="card-top-label">SANTÉ DES DOMAINES &amp; SLA</div>
+              <div id="donut-domains-box" class="donut-flex"></div>
+            </div>
+            <div class="glass-card donut-card">
+              <div class="card-top-label">FLUX &amp; QUARANTAINE ACTIVE</div>
+              <div id="donut-quarantine-box" class="donut-flex"></div>
+            </div>
+          </div>
+
           <div class="hero-analytics-grid">
             <div class="glass-card score-hero-card">
-              <div class="card-top-label">SCORE SANTÉ QUALITÉ (DERNIER RUN)</div>
-              <div class="radial-wrap">
-                <svg viewBox="0 0 160 160" class="radial-svg">
-                  <circle cx="80" cy="80" r="66" class="radial-bg" />
-                  <circle cx="80" cy="80" r="66" id="radial-progress" class="radial-fg" stroke-dasharray="414.69" stroke-dashoffset="414.69" />
+              <div class="card-top-label">DATA QUALITY SCORE (DERNIER RUN)</div>
+              <div class="arc-wrap">
+                <svg viewBox="0 0 200 120" class="arc-svg">
+                  <path d="M 20 100 A 80 80 0 0 1 180 100" class="arc-bg" />
+                  <path d="M 20 100 A 80 80 0 0 1 180 100" id="arc-progress" class="arc-fg" stroke-dasharray="251.33" stroke-dashoffset="251.33" />
                 </svg>
-                <div class="radial-center">
-                  <strong id="hero-score-val">—</strong>
-                  <span id="hero-grade-badge" class="grade-pill">GRADE —</span>
+                <div class="arc-center">
+                  <strong id="hero-score-val">-</strong>
+                  <span id="hero-grade-badge" class="grade-pill">GRADE -</span>
                 </div>
               </div>
               <div id="hero-score-domain" class="muted center-txt">En attente de données</div>
-              <div class="pillars-grid" id="score-pillars-grid"></div>
+              <div class="kpi-mini-row">
+                <div><span class="kpi-label">Runs</span><strong id="kpi-runs">-</strong></div>
+                <div><span class="kpi-label">Lignes</span><strong id="kpi-rows">-</strong></div>
+                <div><span class="kpi-label">Incidents</span><strong id="kpi-findings">-</strong></div>
+                <div><span class="kpi-label">Quarantaine</span><strong id="kpi-quarantine">-</strong></div>
+              </div>
             </div>
 
-            <div class="glass-card chart-hero-card">
+            <div class="glass-card">
               <div class="card-header">
                 <div>
-                  <div class="card-top-label">TRAJECTOIRE DE QUALITÉ &amp; VOLUME (16 DERNIÈRES EXÉCUTIONS)</div>
-                  <h2>Évolution des Scores Qualité (0–100)</h2>
+                  <div class="card-top-label">6 DIMENSIONS DE QUALITÉ DES DONNÉES</div>
+                  <h2>Couverture par Pilier &amp; Conformité SLA (<span id="kpi-sla">-</span>)</h2>
                 </div>
-                <span id="throughput-pill" class="tag tag-emerald">Débit : — lignes/s</span>
+                <span id="throughput-pill" class="tag tag-info">Débit : - l/s</span>
               </div>
-              <div id="score-trend-chart" class="svg-chart-box"></div>
+              <div id="six-dimensions-grid" class="six-dim-grid"></div>
             </div>
           </div>
 
-          <!-- KPI CARDS -->
-          <div class="kpi-grid">
-            <div class="glass-card kpi-card">
-              <span class="kpi-label">Exécutions Auditées</span>
-              <strong id="kpi-runs" class="kpi-val">—</strong>
-              <small class="kpi-sub">Pipelines certifiés</small>
+          <div class="grid-2">
+            <div class="glass-card">
+              <div class="card-header">
+                <div>
+                  <div class="card-top-label">PIPELINE HEALTH &amp; VOLUMÉTRIE EMPILÉE</div>
+                  <h2>Historique Succès / Alertes &amp; Santé (%)</h2>
+                </div>
+                <div class="legend-inline">
+                  <span><i class="dot-lg ok"></i>Sain</span>
+                  <span><i class="dot-lg warn"></i>Alerte</span>
+                  <span><i class="dot-lg err"></i>Échec</span>
+                </div>
+              </div>
+              <div id="stacked-health-chart" class="svg-chart-box"></div>
             </div>
-            <div class="glass-card kpi-card">
-              <span class="kpi-label">Volume Analysé</span>
-              <strong id="kpi-rows" class="kpi-val">—</strong>
-              <small class="kpi-sub">Enregistrements traités</small>
-            </div>
-            <div class="glass-card kpi-card">
-              <span class="kpi-label">Anomalies Détectées</span>
-              <strong id="kpi-findings" class="kpi-val">—</strong>
-              <small class="kpi-sub">Règles &amp; outliers MAD</small>
-            </div>
-            <div class="glass-card kpi-card">
-              <span class="kpi-label">Quarantaine Active</span>
-              <strong id="kpi-quarantine" class="kpi-val">—</strong>
-              <small class="kpi-sub">Lignes à arbitrer</small>
-            </div>
-            <div class="glass-card kpi-card">
-              <span class="kpi-label">Conformité SLA</span>
-              <strong id="kpi-sla" class="kpi-val">—</strong>
-              <small id="kpi-assets" class="kpi-sub">Actifs YAML gouvernés</small>
+
+            <div class="glass-card">
+              <div class="card-header">
+                <div>
+                  <div class="card-top-label">DÉTECTION D'ANOMALIES &amp; CORRIDOR IQR</div>
+                  <h2>Trajectoire Qualité vs Seuils [IQR Low – High]</h2>
+                </div>
+                <span class="tag tag-emerald">Seuil IQR : 78 – 100</span>
+              </div>
+              <div id="corridor-anomaly-chart" class="svg-chart-box"></div>
             </div>
           </div>
 
-          <!-- TABLEAU HISTORIQUE -->
+          <div class="glass-card">
+            <div class="card-header">
+              <div>
+                <h2>Incidents Qualité Récents &amp; Analyse Root-Cause</h2>
+                <p class="muted">Anomalies prioritaires détectées par les contrats YAML et tests statistiques MAD.</p>
+              </div>
+            </div>
+            <div id="root-cause-list" class="incident-feed"></div>
+          </div>
+
           <div class="glass-card">
             <div class="card-header">
               <div>
                 <h2>Journal des Exécutions &amp; Artefacts Certifiés</h2>
-                <p class="muted">Cliquez sur « Inspecter » pour ouvrir le détail des règles déclenchées et télécharger le rapport HTML ou les CSV.</p>
+                <p class="muted">Cliquez sur « Inspecter » pour voir les règles déclenchées et télécharger les exports HTML / CSV.</p>
               </div>
             </div>
             <div class="table-wrap">
@@ -185,7 +192,6 @@
           </div>
         </section>
 
-        <!-- ==================== ONGLET 2 : STUDIO D'AUDIT ==================== -->
         <section id="tab-pipelines" class="tab-panel">
           <div class="grid-2">
             <div class="glass-card">
@@ -197,7 +203,7 @@
                 </label>
                 <label>Contrat de domaine cible
                   <select id="demo-dataset-domain">
-                    <option value="auto">auto — Détection / Inférence automatique</option>
+                    <option value="auto">auto - Détection / Inférence automatique</option>
                   </select>
                 </label>
                 <label class="checkbox-row">
@@ -218,7 +224,7 @@
                 </label>
                 <label>Domaine (ou inférence automatique)
                   <select id="upload-domain-select">
-                    <option value="auto">auto — Détection / Inférence automatique</option>
+                    <option value="auto">auto - Détection / Inférence automatique</option>
                   </select>
                 </label>
                 <label class="checkbox-row">
@@ -247,7 +253,7 @@
                 </div>
                 <label>Domaine cible
                   <select id="sql-domain-select">
-                    <option value="auto">auto — Détection / Inférence automatique</option>
+                    <option value="auto">auto - Détection / Inférence automatique</option>
                   </select>
                 </label>
                 <label class="checkbox-row">
@@ -268,7 +274,7 @@
                 </label>
                 <label>Domaine par défaut
                   <select id="watch-domain-select">
-                    <option value="auto">auto — Détection / Inférence automatique</option>
+                    <option value="auto">auto - Détection / Inférence automatique</option>
                   </select>
                 </label>
                 <button type="submit" class="btn btn-primary">Scanner le Répertoire</button>
@@ -278,7 +284,6 @@
           </div>
         </section>
 
-        <!-- ==================== ONGLET 3 : QUARANTAINE ==================== -->
         <section id="tab-quarantine" class="tab-panel">
           <div class="glass-card">
             <div class="card-header">
@@ -296,7 +301,7 @@
                   <option value="REPLAYED">REPLAYED (Réintégrées)</option>
                   <option value="REJECTED">REJECTED (Rejetées)</option>
                 </select>
-                <button id="btn-replay-quarantine" class="btn btn-emerald">🔄 Rejouer les APPROVED</button>
+                <button id="btn-replay-quarantine" class="btn btn-emerald">↻ Rejouer les APPROVED</button>
                 <button id="btn-load-quarantine" class="btn btn-secondary">Actualiser</button>
               </div>
             </div>
@@ -305,7 +310,6 @@
           </div>
         </section>
 
-        <!-- ==================== ONGLET 4 : DATA CATALOG & GLOSSAIRE ==================== -->
         <section id="tab-catalog" class="tab-panel">
           <div class="glass-card">
             <div class="card-header">
@@ -346,7 +350,7 @@
                 </label>
                 <label>Domaine associé
                   <select id="gl-domain">
-                    <option value="global">global — Transverse entreprise</option>
+                    <option value="global">global - Transverse entreprise</option>
                   </select>
                 </label>
                 <label>Définition métier
@@ -382,7 +386,6 @@
           </div>
         </section>
 
-        <!-- ==================== ONGLET 5 : PII & RGPD ==================== -->
         <section id="tab-pii" class="tab-panel">
           <div class="grid-2">
             <div class="glass-card">
@@ -394,9 +397,9 @@
                 </label>
                 <label>Stratégie d'anonymisation
                   <select id="pii-strategy">
-                    <option value="partial">partial — Masquage partiel (ex: am***@exemple.bj)</option>
-                    <option value="hash">hash — Pseudonymisation SHA-256</option>
-                    <option value="redact">redact — Suppression complète ([REDACTED])</option>
+                    <option value="partial">partial - Masquage partiel (ex: am***@exemple.bj)</option>
+                    <option value="hash">hash - Pseudonymisation SHA-256</option>
+                    <option value="redact">redact - Suppression complète ([REDACTED])</option>
                   </select>
                 </label>
                 <label>Colonnes ciblées (vide = toutes les colonnes sensibles détectées)
@@ -419,7 +422,6 @@
           </div>
         </section>
 
-        <!-- ==================== ONGLET 6 : CHAOS LAB ==================== -->
         <section id="tab-chaos" class="tab-panel">
           <div class="grid-2">
             <div class="glass-card">
@@ -453,7 +455,6 @@
           </div>
         </section>
 
-        <!-- ==================== ONGLET 7 : DRIFT, LINEAGE & SECURITE ==================== -->
         <section id="tab-governance" class="tab-panel">
           <div class="grid-2">
             <div class="glass-card">
@@ -534,7 +535,6 @@
     </div>
   </div>
 
-  <!-- ==================== COMMAND PALETTE (CTRL + K) ==================== -->
   <div id="cmd-modal" class="modal hidden">
     <div class="modal-backdrop" id="cmd-close-bg"></div>
     <div class="cmd-box">
@@ -543,7 +543,6 @@
     </div>
   </div>
 
-  <!-- ==================== MODALE DETAIL D'UN RUN ==================== -->
   <div id="run-modal" class="modal hidden">
     <div class="modal-backdrop" id="modal-close-bg"></div>
     <div class="modal-card">
@@ -556,7 +555,7 @@
       </div>
       <div class="download-bar">
         <button id="dl-report-btn" class="btn btn-primary">📄 Ouvrir Rapport HTML Complet</button>
-        <button id="dl-clean-btn" class="btn btn-emerald">✅ Télécharger CSV Sain (_clean.csv)</button>
+        <button id="dl-clean-btn" class="btn btn-emerald">✓ Télécharger CSV Sain (_clean.csv)</button>
         <button id="dl-annotated-btn" class="btn btn-secondary">🏷️ Télécharger CSV Annoté (_annotated.csv)</button>
       </div>
       <div id="modal-run-body" class="modal-body"></div>
